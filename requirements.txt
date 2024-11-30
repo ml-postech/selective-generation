@@ -1,0 +1,17 @@
+scipy
+pycocotools
+transformers==4.36.2
+datasets==2.16.1
+accelerate==0.26.1
+datasets
+# peft==0.10.0
+
+# sentencepiece
+# protobuf==3.20
+
+# nltk
+# spacy
+# stanza==1.2.0
+# pqdict
+# sentence-transformers
+# pattern
