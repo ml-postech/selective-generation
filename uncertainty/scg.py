@@ -126,15 +126,6 @@ class SCGBaseLearner(SGBaseLearner):
 
         U_j = w_sl*U_sl + w_ssl*U_ssl
 
-        if False:
-            print(
-                f'[binary serach for tau_j] '
-                f'U = {U:.4e}, '
-                f'U_ = {U_:.4e}, '
-                f'tau_e_opt = {tau_e_opt}, '
-                # f'SelGen(j_min, j_max) = ({j_min}, {j_max})'
-            )
-            print()
         return U_j, tau_e_opt
 
     def precompute_classification(self, ld, desc, n=None):
@@ -511,22 +502,26 @@ class SGLearner(SCGBaseLearner):
         #         self._load_model(best=True, is_e=True)
         #     return True
 
+        if self.params.cache_cal_fn:
+            cache_fn = os.path.join(
+                self.params.cache_root,
+                f'{self.params.cache_cal_fn}-CAL2',
+            )
+            cache_fn_e = os.path.join(
+                self.params.cache_root,
+                f'{self.params.cache_cal_fn}-CAL2_E',
+            )
+            os.makedirs(os.path.dirname(cache_fn), exist_ok=True)
+        else:
+            cache_fn = None
+            cache_fn_e = None
 
+
+        rd1 = self.entail_model.rd['val1']
+        rd2 = self.entail_model.rd['val2']
+        rd1_2 = self.entail_model.rd['val1+2']
         # if 'logprobs'
         if self.mdl.G.base_model == None:
-            params.z_e = int(0.75 * len(self.entail_model.rd['val2'])) if params.exp_method == 'SSL' else len(self.entail_model.rd['val2'])
-            params.z_u = min(len(self.entail_model.rd['val1']), params.z_u)
-            params.z_e = min(len(self.entail_model.rd['val2']), params.z_e)
-            print('Z_U size:', params.z_u)
-            print('Z_E size:', params.z_e)
-            self.entail_model.rd['val1'] = self.entail_model.rd['val1'].shuffle(params.seed).select(range(params.z_u))
-            self.entail_model.rd['val2'] = self.entail_model.rd['val2'].shuffle(params.seed).select(range(params.z_e))
-            rd1 = self.entail_model.rd['val1']
-            rd2 = self.entail_model.rd['val2']
-
-            # for new decomposition method
-            self.entail_model.rd['val1+2'] = concatenate_datasets([rd1, rd2])
-            rd1_2 = self.entail_model.rd['val1+2']
 
             scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
             scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
@@ -543,19 +538,6 @@ class SGLearner(SCGBaseLearner):
         
         # Could be different from the answers in dataset if not greedy.
         else:
-            if self.params.cache_cal_fn:
-                cache_fn = os.path.join(
-                    self.params.cache_root,
-                    f'{self.params.cache_cal_fn}-CAL2',
-                )
-                cache_fn_e = os.path.join(
-                    self.params.cache_root,
-                    f'{self.params.cache_cal_fn}-CAL2_E',
-                )
-                os.makedirs(os.path.dirname(cache_fn), exist_ok=True)
-            else:
-                cache_fn = None
-                cache_fn_e = None
 
             scores_dict_u = self.precompute_scores(ld1, params.z_u, cache_fn=cache_fn)
             scores_dict_e = self.precompute_scores(ld2, params.z_e, cache_fn=cache_fn_e)
@@ -672,7 +654,7 @@ class SGLearner(SCGBaseLearner):
         ent_probs_m1_ue, ent_probs_m2_ue = ent_probs_ue[i_sorted], ent_probs_ue[j_sorted]
         ent_labels_m1_ue, ent_labels_m2_ue = ent_labels_ue[i_sorted], ent_labels_ue[j_sorted]
 
-        # These sorts are for SGen_EL because it does need sorted score.
+        # These sorts are for SGen-Sup because it does need sorted score.
         scores_m1_EL, i_sorted = scores_m1_e.sort(descending=False)
         scores_m2_EL, j_sorted = scores_m2_e.sort(descending=False)
         ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_e[i_sorted], ent_labels_e[j_sorted]
@@ -702,7 +684,7 @@ class SGLearner(SCGBaseLearner):
             scores=scores_m1_UE,
             eps=eps,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             errors=errors_m1_UE,
             fer=fer,
         )
@@ -723,7 +705,7 @@ class SGLearner(SCGBaseLearner):
             scores=scores_m2_UE,
             eps=eps,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             errors=errors_m2_UE,
             fer=fer,
         )
@@ -739,7 +721,7 @@ class SGLearner(SCGBaseLearner):
         ############################################
 
         ############################################
-        #            SGen-PL(f_M1)             #
+        #            SGen_PL-H-Semi(f_M1)             #
         tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m1_UE,
             scores_U=scores_m1_U,
@@ -750,22 +732,22 @@ class SGLearner(SCGBaseLearner):
             eps=eps,
             eps_e=eps_e,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen-PL(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen-PL(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen-PL(f_M1)]')
+        self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]')
         quali_tau_s.append(tau_s_opt)
         ############################################
 
         ############################################
-        #            SGen-PL(f_M2)             #
+        #            SGen_PL-H-Semi(f_M2)             #
         tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m2_UE,
             scores_U=scores_m2_U,
@@ -776,22 +758,22 @@ class SGLearner(SCGBaseLearner):
             eps=eps,
             eps_e=eps_e,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen-PL(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen-PL(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen-PL(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
         ############################################
-        #       SGen-PL(f_M1, filtering)       #
+        #       SGen_PL-H-Semi(f_M1, filtering)       #
         tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m1_UE,
             scores_U=scores_m1_U,
@@ -802,7 +784,7 @@ class SGLearner(SCGBaseLearner):
             eps=eps,
             eps_e=eps_e,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             filtering=True,
             ent_probs_UE=ent_probs_m1_UE,
             ent_labels_UE=ent_labels_m1_UE,
@@ -810,17 +792,17 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen-PL-filter(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen-PL-filter(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen-PL-filter(f_M1)]')
+        self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]')
         quali_tau_s.append(tau_s_opt)
         ############################################
 
         ############################################
-        #       SGen-PL(f_M2, filtering)       #
+        #       SGen_PL-H-Semi(f_M2, filtering)       #
         tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m2_UE,
             scores_U=scores_m2_U,
@@ -831,7 +813,7 @@ class SGLearner(SCGBaseLearner):
             eps=eps,
             eps_e=eps_e,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             filtering=True,
             ent_probs_UE=ent_probs_m2_UE,
             ent_labels_UE=ent_labels_m2_UE,
@@ -839,17 +821,17 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen-PL-filter(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen-PL-filter(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen-PL-filter(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
         ############################################
-        #             CSGen(f_M1)              #
+        #             SGen_NoMS-Semi(f_M1)              #
         tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m1_UE,
             scores_U=scores_m1_U,
@@ -862,23 +844,23 @@ class SGLearner(SCGBaseLearner):
             delta_s=delta_s,
             delta_e=delta_e,
             delta_p=delta_p,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
             K=K,
         )
 
         if U_min_opt <= eps:
-            print(f'[CSGen(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[CSGen(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[CSGen(f_M1)]')
+        self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]')
         quali_tau_s.append(tau_s_opt)
         ############################################
 
         ############################################
-        #             CSGen(f_M2)              #
+        #             SGen_NoMS-Semi(f_M2)              #
         tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m2_UE,
             scores_U=scores_m2_U,
@@ -891,68 +873,68 @@ class SGLearner(SCGBaseLearner):
             delta_s=delta_s,
             delta_e=delta_e,
             delta_p=delta_p,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
             K=K,
         )
 
         if U_min_opt <= eps:
-            print(f'[CSGen(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[CSGen(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[CSGen(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
 
         ############################################
-        #            SGen_EL(f_M1)             #
+        #            SGen-Sup(f_M1)             #
         tau_s_opt, U_min_opt, eff = SG_Baseline.train(
             # ent_labels=ent_labels_E1, # this is implemented in errors.
             scores=scores_m1_EL,
             eps=eps,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             errors=(ent_labels_m1_EL==0),
             fer=fer,
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_EL(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen_EL(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_EL(f_M1)]')
+        self.test(tau_s_opt, '[SGen-Sup(f_M1)]')
         quali_tau_s.append(tau_s_opt)
 
         ############################################
-        #            SGen_EL(f_M2)             #
+        #            SGen-Sup(f_M2)             #
         tau_s_opt, U_min_opt, eff = SG_Baseline.train(
             # ent_labels=ent_labels_E2, # this is implemented in errors.
             scores=scores_m2_EL,
             eps=eps,
             delta=delta,
-            verbose=False,
+            verbose=params.verbose,
             errors=(ent_labels_m2_EL==0),
             fer=fer,
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_EL(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen_EL(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_EL(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen-Sup(f_M2)]', feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
 
         ############################################
-        #               CSGen_NS               #
+        #               SGen-Semi               #
         #          with new decomposition          #
         tau_s_opt, feat_idx, _ = SG_MS.train(
             scores_m1_UE=scores_m1_UE,
@@ -969,49 +951,21 @@ class SGLearner(SCGBaseLearner):
             delta_s=delta_s,
             delta_e=delta_e,
             delta_p=delta_p,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
             K=K,
         )
         print('#'*20)
-        self.test(tau_s_opt, '[CSGen_NS]', feat_idx)
+        self.test(tau_s_opt, '[SGen-Semi]', feat_idx)
         quali_tau_s.append(tau_s_opt)
         print('#'*20)
         print()
         ############################################
-        ############################################
-        #             CSGen_NS_eff             #
-        #          with new decomposition          #
-        # tau_s_opt, feat_idx, _ = SG_MS_eff.train(
-        #     scores_m1_UE=scores_m1_UE,
-        #     scores_m2_UE=scores_m2_UE,
-        #     scores_m1_E=scores_m1_E,
-        #     scores_m2_E=scores_m2_E,
-        #     ent_probs_E=ent_probs_E,
-        #     ent_labels_E=ent_labels_E,
-        #     scores_m1_U=scores_m1_U,
-        #     scores_m2_U=scores_m2_U,
-        #     ent_probs_U=ent_probs_U,
-        #     eps=eps,
-        #     eps_e=eps_e,
-        #     delta_s=delta_s,
-        #     delta_e=delta_e,
-        #     delta_p=delta_p,
-        #     verbose=False,
-        #     fer=fer,
-        #     K=K,
-        # )
-        # print('#'*20)
-        # self.test(tau_s_opt, '[CSGen_NS_eff]', feat_idx)
-        # quali_tau_s.append(tau_s_opt)
-        # print('#'*20)
-        # print()
-        ############################################
 
-        # CSGen-Sup
+        # SGen_NoMS-Semi-Sup
         # 
         ############################################
-        #           CSGen-Sup(f_M1)            #
+        #           SGen_NoMS-Semi-Sup(f_M1)            #
         tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m1_E,
             scores_U=None,
@@ -1024,23 +978,23 @@ class SGLearner(SCGBaseLearner):
             delta_s=delta_s,
             delta_e=delta_e,
             delta_p=delta_p,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
             K=K,
         )
 
         if U_min_opt <= eps:
-            print(f'[CSGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[CSGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[CSGen-Sup(f_M1)]')
+        self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]')
         quali_tau_s.append(tau_s_opt)
         ############################################
 
         ############################################
-        #           CSGen-Sup(f_M2)            #
+        #           SGen_NoMS-Semi-Sup(f_M2)            #
         tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m2_E,
             scores_U=None,
@@ -1053,25 +1007,25 @@ class SGLearner(SCGBaseLearner):
             delta_s=delta_s,
             delta_e=delta_e,
             delta_p=delta_p,
-            verbose=False,
+            verbose=params.verbose,
             fer=fer,
             K=K,
         )
 
         if U_min_opt <= eps:
-            print(f'[CSGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[CSGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[CSGen-Sup(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
 
         # sys.exit()
 
-    def plot(self, ld_un, ld, updated_params=None):
+    def plot(self, ld1, ld2, updated_params=None):
         # init params
         params = copy.deepcopy(self.params)
         if updated_params:
@@ -1126,13 +1080,8 @@ class SGLearner(SCGBaseLearner):
         fdr_res = []
         if_failed_res = []
 
-        # shuffled only once for each zu_size
-        print(params.z_u)
-        print(params.z_e)
-        params.z_u = min(len(self.entail_model.rd['val1']), params.z_u)
-        params.z_e = min(len(self.entail_model.rd['val2']), params.z_e)
-        rd1 = self.entail_model.rd['val1'].shuffle(params.seed).select(range(params.z_u))
-        rd2_origin = self.entail_model.rd['val2'].shuffle(params.seed).select(range(params.z_e))
+        rd1 = self.entail_model.rd['val1']
+        rd2_origin = self.entail_model.rd['val2']
         rd_test_origin = self.entail_model.rd['test']
 
         for plot_idx in tqdm(range(100)):
@@ -1164,11 +1113,10 @@ class SGLearner(SCGBaseLearner):
                 # for new decomposition method
                 self.entail_model.rd['val1+2'] = concatenate_datasets([rd1, rd2])
                 rd1_2 = self.entail_model.rd['val1+2']
-                # print('여기', rd1, rd2, rd1_2)
 
-                scores_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
-                scores_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
-                scores_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
+                scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
+                scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
+                scores_m1_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
 
                 decoded_answer_u = [d['answer'] for d in rd1]
                 decoded_answer_pred_u = [d['generated_answer'] for d in rd1]
@@ -1178,121 +1126,145 @@ class SGLearner(SCGBaseLearner):
 
                 decoded_answer_ue = [d['answer'] for d in rd1_2]
                 decoded_answer_pred_ue = [d['generated_answer'] for d in rd1_2]
-            
+
+            # Could be different from the answers in dataset if not greedy.
+            else:
+                
+                scores_dict_u = self.precompute_scores(ld1, params.z_u, cache_fn=cache_fn)
+                scores_dict_e = self.precompute_scores(ld2, params.z_e, cache_fn=cache_fn_e)
+
+                scores_m1_u = tc.hstack([lp.mean().exp() for lp in scores_dict_u['logprobs_answer_pred']])
+                scores_m1_e = tc.hstack([lp.mean().exp() for lp in scores_dict_e['logprobs_answer_pred']])
+                scores_m1_ue = tc.cat([scores_m1_u, scores_m1_e], dim=0)
+
+                decoded_answer_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids'], skip_special_tokens=True)
+                decoded_answer_pred_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids_pred'], skip_special_tokens=True)
+                decoded_answer_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids'], skip_special_tokens=True)
+                decoded_answer_pred_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids_pred'], skip_special_tokens=True)
+                decoded_answer_pred_ue = decoded_answer_pred_u + decoded_answer_pred_e
+
             answer_e = [normalize_answer(a) for a in decoded_answer_e]
             answer_pred_e = [normalize_answer(a) for a in decoded_answer_pred_e]
-            errors_e = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_e, answer_pred_e)], device=scores_e.device)
+            # errors_e = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_e, answer_pred_e)], device=scores_e.device)
 
             answer_u = [normalize_answer(a) for a in decoded_answer_u]
             answer_pred_u = [normalize_answer(a) for a in decoded_answer_pred_u]
-            errors_u = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_u, answer_pred_u)], device=scores_e.device)
-            # print(errors.shape)
+            # errors_u = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_u, answer_pred_u)], device=scores_e.device)
 
             answer_ue = [normalize_answer(a) for a in decoded_answer_ue]
             answer_pred_ue = [normalize_answer(a) for a in decoded_answer_pred_ue]
-            errors_ue = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_ue, answer_pred_ue)], device=scores_e.device)
+            errors_ue = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_ue, answer_pred_ue)], device=scores_m1_ue.device)
+            
 
             # entail modl init & score computation
-            # entail_ld_u = self.entail_model.init_dataset_nli(
-            #     decoded_answer_pred_u,
-            #     # val1, val1+2 or val2.
-            #     'val1'
-            # )
-            # entail_ld_e = self.entail_model.init_dataset_nli(
-            #     decoded_answer_pred_e,
-            #     'val2'
-            # )
+            if params.entail_model in ["deberta-v2-xxlarge-mnli", None]:
+                ent_probs_u = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd1])
+                ent_labels_u = tc.hstack([tc.tensor([-1]) for lp in rd1]) # all labels are -1
+                ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
+                ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
 
-            # if self.params.cache_ent_fn:
-            #     cache_ent_fn_e = os.path.join(
-            #         self.params.cache_root,
-            #         f'{self.params.cache_ent_fn}-CAL2_E-{params.z_e}',
-            #     )
-            #     cache_ent_fn_u = os.path.join(
-            #         self.params.cache_root,
-            #         f'{self.params.cache_ent_fn}-CAL2-Z_U-{params.z_u}',
-            #     )
-            #     os.makedirs(os.path.dirname(cache_ent_fn_u), exist_ok=True)
-            # else:
-            #     cache_ent_fn_u = None
-            #     cache_ent_fn_e = None
-
-            # ent_scores_dict_e = self.precompute_entail_scores(entail_ld_e, cache_fn=cache_ent_fn_e)
-            # ent_scores_dict_u = self.precompute_entail_scores(entail_ld_u, cache_fn=cache_ent_fn_u)
+                # mean, entail/(entail+contradict)
+                scores_m2_u = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1])
+                scores_m2_e = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd2])
+                scores_m2_ue = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1_2])
             
-            # ent_probs_e = 1 - ent_scores_dict_e['probs'][..., 0]
-            # ent_labels_e = ent_scores_dict_e['labels']
+            else:
+                entail_ld_u = self.entail_model.init_dataset_nli(
+                    decoded_answer_pred_u,
+                    # val1, val1+2 or val2.
+                    'val1'
+                )
+                entail_ld_e = self.entail_model.init_dataset_nli(
+                    decoded_answer_pred_e,
+                    'val2'
+                )
+                entail_ld_sam_u = self.entail_model.init_sample_dataset_nli(
+                    decoded_answer_pred_u,
+                    'val1'
+                )
+                entail_ld_sam_e = self.entail_model.init_sample_dataset_nli(
+                    decoded_answer_pred_e,
+                    'val2'
+                )
 
-            # ent_probs_u = 1 - ent_scores_dict_u['probs'][..., 0]
-            # ent_labels_u = ent_scores_dict_u['labels'] # all labels are -1
+                if self.params.cache_ent_fn:
+                    cache_ent_fn_e = os.path.join(
+                        self.params.cache_root,
+                        f'{self.params.cache_ent_fn}-CAL2_ZE-{params.z_e}',
+                    )
+                    cache_ent_fn_u = os.path.join(
+                        self.params.cache_root,
+                        f'{self.params.cache_ent_fn}-CAL2-ZU-{params.z_u}',
+                    )
+                    cache_ent_fn_sam_e = os.path.join(
+                        self.params.cache_root,
+                        f'{self.params.cache_ent_fn}-CAL2-SAM-ZE-{params.z_e}',
+                    )
+                    cache_ent_fn_sam_u = os.path.join(
+                        self.params.cache_root,
+                        f'{self.params.cache_ent_fn}-CAL2-SAM-ZU-{params.z_u}',
+                    )
+                    os.makedirs(os.path.dirname(cache_ent_fn_u), exist_ok=True)
+                else:
+                    cache_ent_fn_u = None
+                    cache_ent_fn_e = None
+                    cache_ent_fn_sam_u = None
+                    cache_ent_fn_sam_e = None
 
 
-            
-            ent_probs_u = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd1])
-            ent_labels_u = tc.hstack([tc.tensor([-1]) for lp in rd1]) # all labels are -1
-            ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
-            ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
+                ent_scores_dict_e = self.precompute_entail_scores(entail_ld_e, cache_fn=cache_ent_fn_e)
+                ent_scores_dict_u = self.precompute_entail_scores(entail_ld_u, cache_fn=cache_ent_fn_u)
+                ent_scores_dict_sam_e = self.precompute_entail_scores(entail_ld_sam_e, cache_fn=cache_ent_fn_sam_e)
+                ent_scores_dict_sam_u = self.precompute_entail_scores(entail_ld_sam_u, cache_fn=cache_ent_fn_sam_u)
+                
+                ent_probs_e = 1 - ent_scores_dict_e['probs'][..., 0]
+                ent_labels_e = ent_scores_dict_e['labels']
+
+                ent_probs_u = 1 - ent_scores_dict_u['probs'][..., 0]
+                ent_labels_u = ent_scores_dict_u['labels'] # all labels are -1
+
+                # mean, entail/(entail+contradict)
+                sample_size = len(rd2[0]['samples'])
+                ent_probs_sam_e = ent_scores_dict_sam_e['probs'].view(-1, sample_size, 3)
+                ent_probs_sam_u = ent_scores_dict_sam_u['probs'].view(-1, sample_size, 3)
+                
+                scores_m2_u = (1 - ent_probs_sam_u[..., 0]).mean(dim=1)
+                scores_m2_e = (1 - ent_probs_sam_e[..., 0]).mean(dim=1)
+                scores_m2_ue = tc.cat([scores_m2_u, scores_m2_e], dim=0)
+
 
             # For filtering, added this temporary lines. later will be fixed
             ent_probs_ue = tc.cat([ent_probs_u, ent_probs_e], dim=0)
             ent_labels_ue = tc.cat([ent_labels_u, ent_labels_e], dim=0)
 
-            # mean, e/(e+c)
-            scores_m2_u = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1])
-            scores_m2_e = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd2])
-            scores_m2_ue = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1_2])
-            # scores_u = tc.hstack([(tc.tensor(ss['samples_scores'])[..., 2] / (tc.tensor(ss['samples_scores'])[..., 0] + tc.tensor(ss['samples_scores'])[..., 2])).mean() for ss in rd1])
-            # scores = tc.hstack([(tc.tensor(ss['samples_scores'])[..., 2] / (tc.tensor(ss['samples_scores'])[..., 0] + tc.tensor(ss['samples_scores'])[..., 2])).mean() for ss in rd2])
-            scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
-            scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
-            scores_m1_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
-
-
-            # # f_E2
-            # ent_probs_e2_e = ent_scores_dict_e['probs'][..., 2] / (ent_scores_dict_e['probs'][..., 0] + ent_scores_dict_e['probs'][..., 2])
-            # ent_probs_e2_u = ent_scores_dict_u['probs'][..., 2] / (ent_scores_dict_u['probs'][..., 0] + ent_scores_dict_u['probs'][..., 2])
-
 
             # Z_E,U
             scores_m1_ue, i_sorted = scores_m1_ue.sort(descending=False)
-            errors_m1_ue = errors_ue[i_sorted]
-            ent_probs_m1_ue = ent_probs_ue[i_sorted]
-            ent_labels_m1_ue = ent_labels_ue[i_sorted]
-            # scores_m2_ue = scores_m2_ue[i_sorted]
             scores_m2_ue, j_sorted = scores_m2_ue.sort(descending=False)
-            errors_m2_ue = errors_ue[j_sorted]
-            ent_probs_m2_ue = ent_probs_ue[i_sorted]
-            ent_labels_m2_ue = ent_labels_ue[i_sorted]
+            errors_m1_ue, errors_m2_ue = errors_ue[i_sorted], errors_ue[j_sorted]
+            ent_probs_m1_ue, ent_probs_m2_ue = ent_probs_ue[i_sorted], ent_probs_ue[j_sorted]
+            ent_labels_m1_ue, ent_labels_m2_ue = ent_labels_ue[i_sorted], ent_labels_ue[j_sorted]
 
-            # These sorts are for SGen_EL. because it does need sorted score.
+            # These sorts are for SGen-Sup because it does need sorted score.
             scores_m1_EL, i_sorted = scores_m1_e.sort(descending=False)
-            ent_labels_m1_EL = ent_labels_e[i_sorted]
             scores_m2_EL, j_sorted = scores_m2_e.sort(descending=False)
-            ent_labels_m2_EL = ent_labels_e[j_sorted]
+            ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_e[i_sorted], ent_labels_e[j_sorted]
 
             # device
-            scores_m1_UE = scores_m1_ue.to(self.device)
-            scores_m2_UE = scores_m2_ue.to(self.device)
-            errors_m1_UE = errors_m1_ue.to(self.device)
-            errors_m2_UE = errors_m2_ue.to(self.device)
-            ent_probs_m1_UE = ent_probs_m1_ue.to(self.device)
-            ent_probs_m2_UE = ent_probs_m2_ue.to(self.device)
-            ent_labels_m1_UE = ent_labels_m1_ue.to(self.device)
-            ent_labels_m2_UE = ent_labels_m2_ue.to(self.device)
+            device = self.device
+            scores_m1_UE, scores_m2_UE = scores_m1_ue.to(device), scores_m2_ue.to(device)
+            errors_m1_UE, errors_m2_UE = errors_m1_ue.to(device), errors_m2_ue.to(device)
+            ent_probs_m1_UE, ent_probs_m2_UE = ent_probs_m1_ue.to(device), ent_probs_m2_ue.to(device)
+            ent_labels_m1_UE, ent_labels_m2_UE = ent_labels_m1_ue.to(device), ent_labels_m2_ue.to(device)
 
-            scores_m1_E = scores_m1_e.to(self.device)
-            scores_m2_E = scores_m2_e.to(self.device)
-            ent_probs_E = ent_probs_e.to(self.device)
-            ent_labels_E = ent_labels_e.to(self.device)
+            scores_m1_E, scores_m2_E = scores_m1_e.to(device), scores_m2_e.to(device)
+            ent_probs_E, ent_labels_E = ent_probs_e.to(device), ent_labels_e.to(device)
 
-            scores_m1_U = scores_m1_u.to(self.device)
-            scores_m2_U = scores_m2_u.to(self.device)
-            ent_probs_U = ent_probs_u.to(self.device)
+            scores_m1_U, scores_m2_U = scores_m1_u.to(device), scores_m2_u.to(device)
+            ent_probs_U = ent_probs_u.to(device)
 
-            scores_m1_EL = scores_m1_EL.to(self.device)
-            scores_m2_EL = scores_m2_EL.to(self.device)
-            ent_labels_m1_EL = ent_labels_m1_EL.to(self.device)
-            ent_labels_m2_EL = ent_labels_m2_EL.to(self.device)
+            scores_m1_EL, scores_m2_EL = scores_m1_EL.to(device), scores_m2_EL.to(device)
+            ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_m1_EL.to(device), ent_labels_m2_EL.to(device)
             
             
             effs = {}
@@ -1306,7 +1278,7 @@ class SGLearner(SCGBaseLearner):
                 scores=scores_m1_UE,
                 eps=eps,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 errors=errors_m1_UE,
                 fer=fer,
             )
@@ -1319,7 +1291,7 @@ class SGLearner(SCGBaseLearner):
             print()
 
             ## test
-            res = self.test(tau_s_opt, '[SGen-EM(f_M1)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen-EM(f_M1)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen-EM(f_M1)'] = eff
             fdrs['SGen-EM(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1331,7 +1303,7 @@ class SGLearner(SCGBaseLearner):
                 scores=scores_m2_UE,
                 eps=eps,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 errors=errors_m2_UE,
                 fer=fer,
             )
@@ -1344,14 +1316,14 @@ class SGLearner(SCGBaseLearner):
             print()
 
             ## test
-            res = self.test(tau_s_opt, '[SGen-EM(f_M2)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen-EM(f_M2)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen-EM(f_M2)'] = eff
             fdrs['SGen-EM(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #            SGen-PL(f_M1)             #
+            #            SGen_PL-H-Semi(f_M1)             #
             tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m1_UE,
                 scores_U=scores_m1_U,
@@ -1362,26 +1334,26 @@ class SGLearner(SCGBaseLearner):
                 eps=eps,
                 eps_e=eps_e,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-PL(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-PL(f_M1)'] = True
+                print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_PL-H-Semi(f_M1)'] = True
             else:
-                print(f'[SGen-PL(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-PL(f_M1)'] = False
+                print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_PL-H-Semi(f_M1)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-PL(f_M1)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-PL(f_M1)'] = eff
-            fdrs['SGen-PL(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_PL-H-Semi(f_M1)'] = eff
+            fdrs['SGen_PL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #            SGen-PL(f_M2)             #
+            #            SGen_PL-H-Semi(f_M2)             #
             tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m2_UE,
                 scores_U=scores_m2_U,
@@ -1392,26 +1364,26 @@ class SGLearner(SCGBaseLearner):
                 eps=eps,
                 eps_e=eps_e,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-PL(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-PL(f_M2)'] = True
+                print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_PL-H-Semi(f_M2)'] = True
             else:
-                print(f'[SGen-PL(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-PL(f_M2)'] = False
+                print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_PL-H-Semi(f_M2)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-PL(f_M2)]', feat_idx=1, verbose=False)
+            res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-PL(f_M2)'] = eff
-            fdrs['SGen-PL(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_PL-H-Semi(f_M2)'] = eff
+            fdrs['SGen_PL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #       SGen-PL(f_M1, filtering)       #
+            #       SGen_PL-H-Semi(f_M1, filtering)       #
             tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m1_UE,
                 scores_U=scores_m1_U,
@@ -1422,7 +1394,7 @@ class SGLearner(SCGBaseLearner):
                 eps=eps,
                 eps_e=eps_e,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 filtering=True,
                 ent_probs_UE=ent_probs_m1_UE,
                 ent_labels_UE=ent_labels_m1_UE,
@@ -1430,21 +1402,21 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-PL-filter(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-PL-filter(f_M1)'] = True
+                print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_PFL-H-Semi(f_M1)'] = True
             else:
-                print(f'[SGen-PL-filter(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-PL-filter(f_M1)'] = False
+                print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_PFL-H-Semi(f_M1)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-PL-filter(f_M1)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-PL-filter(f_M1)'] = eff
-            fdrs['SGen-PL-filter(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_PFL-H-Semi(f_M1)'] = eff
+            fdrs['SGen_PFL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #       SGen-PL(f_M2, filtering)       #
+            #       SGen_PL-H-Semi(f_M2, filtering)       #
             tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m2_UE,
                 scores_U=scores_m2_U,
@@ -1455,7 +1427,7 @@ class SGLearner(SCGBaseLearner):
                 eps=eps,
                 eps_e=eps_e,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 filtering=True,
                 ent_probs_UE=ent_probs_m2_UE,
                 ent_labels_UE=ent_labels_m2_UE,
@@ -1463,21 +1435,21 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-PL-filter(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-PL-filter(f_M2)'] = True
+                print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_PFL-H-Semi(f_M2)'] = True
             else:
-                print(f'[SGen-PL-filter(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-PL-filter(f_M2)'] = False
+                print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_PFL-H-Semi(f_M2)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-PL-filter(f_M2)]', feat_idx=1, verbose=False)
+            res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-PL-filter(f_M2)'] = eff
-            fdrs['SGen-PL-filter(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_PFL-H-Semi(f_M2)'] = eff
+            fdrs['SGen_PFL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #             CSGen(f_M1)              #
+            #             SGen_NoMS-Semi(f_M1)              #
             tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m1_UE,
                 scores_U=scores_m1_U,
@@ -1490,27 +1462,27 @@ class SGLearner(SCGBaseLearner):
                 delta_s=delta_s,
                 delta_e=delta_e,
                 delta_p=delta_p,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
                 K=K,
             )
 
             if U_min_opt <= eps:
-                print(f'[CSGen(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['CSGen(f_M1)'] = True
+                print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_NoMS-Semi(f_M1)'] = True
             else:
-                print(f'[CSGen(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['CSGen(f_M1)'] = False
+                print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_NoMS-Semi(f_M1)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[CSGen(f_M1)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['CSGen(f_M1)'] = eff
-            fdrs['CSGen(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_NoMS-Semi(f_M1)'] = eff
+            fdrs['SGen_NoMS-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #             CSGen(f_M2)              #
+            #             SGen_NoMS-Semi(f_M2)              #
             tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m2_UE,
                 scores_U=scores_m2_U,
@@ -1523,79 +1495,79 @@ class SGLearner(SCGBaseLearner):
                 delta_s=delta_s,
                 delta_e=delta_e,
                 delta_p=delta_p,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
                 K=K,
             )
 
             if U_min_opt <= eps:
-                print(f'[CSGen(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['CSGen(f_M2)'] = True
+                print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_NoMS-Semi(f_M2)'] = True
             else:
-                print(f'[CSGen(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['CSGen(f_M2)'] = False
+                print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_NoMS-Semi(f_M2)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[CSGen(f_M2)]', feat_idx=1, verbose=False)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['CSGen(f_M2)'] = eff
-            fdrs['CSGen(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_NoMS-Semi(f_M2)'] = eff
+            fdrs['SGen_NoMS-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
 
             ############################################
-            #            SGen_EL(f_M1)             #
+            #            SGen-Sup(f_M1)             #
             tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                 # ent_labels=ent_labels_E1, # this is implemented in errors.
                 scores=scores_m1_EL,
                 eps=eps,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 errors=(ent_labels_m1_EL==0),
                 fer=fer,
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-EL(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-EL(f_M1)'] = True
+                print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen-Sup(f_M1)'] = True
             else:
-                print(f'[SGen-EL(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-EL(f_M1)'] = False
+                print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen-Sup(f_M1)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-EL(f_M1)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen-Sup(f_M1)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-EL(f_M1)'] = eff
-            fdrs['SGen-EL(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen-Sup(f_M1)'] = eff
+            fdrs['SGen-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
-            #            SGen_EL(f_M2)             #
+            #            SGen-Sup(f_M2)             #
             tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                 # ent_labels=ent_labels_E2, # this is implemented in errors.
                 scores=scores_m2_EL,
                 eps=eps,
                 delta=delta,
-                verbose=False,
+                verbose=params.verbose,
                 errors=(ent_labels_m2_EL==0),
                 fer=fer,
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-EL(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-EL(f_M2)'] = True
+                print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen-Sup(f_M2)'] = True
             else:
-                print(f'[SGen-EL(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-EL(f_M2)'] = False
+                print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen-Sup(f_M2)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-EL(f_M2)]', feat_idx=1, verbose=False)
+            res = self.test(tau_s_opt, '[SGen-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-EL(f_M2)'] = eff
-            fdrs['SGen-EL(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen-Sup(f_M2)'] = eff
+            fdrs['SGen-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
 
             ############################################
-            #               CSGen_NS               #
+            #               SGen-Semi               #
             #          with new decomposition          #
             tau_s_opt, feat_idx, U_min_opt = SG_MS.train(
                 scores_m1_UE=scores_m1_UE,
@@ -1612,57 +1584,25 @@ class SGLearner(SCGBaseLearner):
                 delta_s=delta_s,
                 delta_e=delta_e,
                 delta_p=delta_p,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
                 K=K,
             )
-            if_failed['CSGen-NS'] = True if U_min_opt <= eps else False
+            if_failed['SGen_NoMS-Semi-NS'] = True if U_min_opt <= eps else False
 
             
-            res = self.test(tau_s_opt, '[CSGen_NS]', feat_idx, verbose=False)
+            res = self.test(tau_s_opt, '[SGen-Semi]', feat_idx, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['CSGen-NS'] = eff
-            fdrs['CSGen-NS'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_NoMS-Semi-NS'] = eff
+            fdrs['SGen_NoMS-Semi-NS'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             # print('#'*20)
             print()
             ############################################
-            ############################################
-            #             CSGen_NS_eff             #
-            #          with new decomposition          #
-            # tau_s_opt, feat_idx, U_min_opt = SG_MS_eff.train(
-            #     scores_m1_UE=scores_m1_UE,
-            #     scores_m2_UE=scores_m2_UE,
-            #     scores_m1_E=scores_m1_E,
-            #     scores_m2_E=scores_m2_E,
-            #     ent_probs_E=ent_probs_E,
-            #     ent_labels_E=ent_labels_E,
-            #     scores_m1_U=scores_m1_U,
-            #     scores_m2_U=scores_m2_U,
-            #     ent_probs_U=ent_probs_U,
-            #     eps=eps,
-            #     eps_e=eps_e,
-            #     delta_s=delta_s,
-            #     delta_e=delta_e,
-            #     delta_p=delta_p,
-            #     verbose=False,
-            #     fer=fer,
-            #     K=K,
-            # )
-            # if_failed['CSGen-NS-eff'] = True if U_min_opt <= eps else False
 
-            
-            # res = self.test(tau_s_opt, '[CSGen_NS_eff]', feat_idx, verbose=False)
-            # eff = res["sel_test"].float().mean()
-            # effs['CSGen-NS-eff'] = eff
-            # fdrs['CSGen-NS-eff'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
-            # # print('#'*20)
-            # print()
-            ############################################
-
-            # CSGen-Sup
+            # SGen_NoMS-Semi-Sup
             # 
             ############################################
-            #           CSGen-Sup(f_M1)            #
+            #           SGen_NoMS-Semi-Sup(f_M1)            #
             tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m1_E,
                 scores_U=None,
@@ -1675,27 +1615,27 @@ class SGLearner(SCGBaseLearner):
                 delta_s=delta_s,
                 delta_e=delta_e,
                 delta_p=delta_p,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
                 K=K,
             )
 
             if U_min_opt <= eps:
-                print(f'[CSGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['CSGen-Sup(f_M1)'] = True
+                print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = True
             else:
-                print(f'[CSGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['CSGen-Sup(f_M1)'] = False
+                print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[CSGen-Sup(f_M1)]', verbose=False)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['CSGen-Sup(f_M1)'] = eff
-            fdrs['CSGen-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_NoMS-Semi-Sup(f_M1)'] = eff
+            fdrs['SGen_NoMS-Semi-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
-            #           CSGen-Sup(f_M2)            #
+            #           SGen_NoMS-Semi-Sup(f_M2)            #
             tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m2_E,
                 scores_U=None,
@@ -1708,23 +1648,23 @@ class SGLearner(SCGBaseLearner):
                 delta_s=delta_s,
                 delta_e=delta_e,
                 delta_p=delta_p,
-                verbose=False,
+                verbose=params.verbose,
                 fer=fer,
                 K=K,
             )
 
             if U_min_opt <= eps:
-                print(f'[CSGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['CSGen-Sup(f_M2)'] = True
+                print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = True
             else:
-                print(f'[CSGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['CSGen-Sup(f_M2)'] = False
+                print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = False
             print()
             ## test
-            res = self.test(tau_s_opt, '[CSGen-Sup(f_M2)]', feat_idx=1, verbose=False)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['CSGen-Sup(f_M2)'] = eff
-            fdrs['CSGen-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_NoMS-Semi-Sup(f_M2)'] = eff
+            fdrs['SGen_NoMS-Semi-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
 
@@ -1748,7 +1688,7 @@ class SGLearner(SCGBaseLearner):
         pickle.dump(falied_result, open(f'camera-ready/{params.output_dir}_n-failed_zu-{params.z_u}_ze-{params.z_e}_epS-{eps}', 'wb'))
         sys.exit(0)
 
-    def quan_plot(self, ld_un, ld, updated_params=None):
+    def quan_plot(self, ld1, ld2, updated_params=None):
         # init params
         params = copy.deepcopy(self.params)
         if updated_params:
@@ -1801,12 +1741,8 @@ class SGLearner(SCGBaseLearner):
 
 
         # shuffled only once for each zu_size
-        print(params.z_u)
-        print(params.z_e)
-        params.z_u = min(len(self.entail_model.rd['val1']), params.z_u)
-        params.z_e = min(len(self.entail_model.rd['val2']), params.z_e)
-        rd1_origin = self.entail_model.rd['val1'].shuffle(params.seed)#.select(range(params.z_u))
-        rd2_origin = self.entail_model.rd['val2'].shuffle(params.seed).select(range(params.z_e))
+        rd1_origin = self.entail_model.rd['val1']
+        rd2_origin = self.entail_model.rd['val2']
         rd_test_origin = self.entail_model.rd['test']
 
         # TODO params
@@ -1845,15 +1781,13 @@ class SGLearner(SCGBaseLearner):
                     self.entail_model.rd['val2'] = rd2
                     self.entail_model.rd['test'] = rd_test
 
-
                     # for new decomposition method
                     self.entail_model.rd['val1+2'] = concatenate_datasets([rd1, rd2])
                     rd1_2 = self.entail_model.rd['val1+2']
-                    # print('여기', rd1, rd2, rd1_2)
 
-                    scores_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
-                    scores_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
-                    scores_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
+                    scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
+                    scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
+                    scores_m1_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
 
                     decoded_answer_u = [d['answer'] for d in rd1]
                     decoded_answer_pred_u = [d['generated_answer'] for d in rd1]
@@ -1863,121 +1797,145 @@ class SGLearner(SCGBaseLearner):
 
                     decoded_answer_ue = [d['answer'] for d in rd1_2]
                     decoded_answer_pred_ue = [d['generated_answer'] for d in rd1_2]
-                
+
+                # Could be different from the answers in dataset if not greedy.
+                else:
+
+                    scores_dict_u = self.precompute_scores(ld1, params.z_u, cache_fn=cache_fn)
+                    scores_dict_e = self.precompute_scores(ld2, params.z_e, cache_fn=cache_fn_e)
+
+                    scores_m1_u = tc.hstack([lp.mean().exp() for lp in scores_dict_u['logprobs_answer_pred']])
+                    scores_m1_e = tc.hstack([lp.mean().exp() for lp in scores_dict_e['logprobs_answer_pred']])
+                    scores_m1_ue = tc.cat([scores_m1_u, scores_m1_e], dim=0)
+
+                    decoded_answer_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids'], skip_special_tokens=True)
+                    decoded_answer_pred_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids_pred'], skip_special_tokens=True)
+                    decoded_answer_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids'], skip_special_tokens=True)
+                    decoded_answer_pred_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids_pred'], skip_special_tokens=True)
+                    decoded_answer_pred_ue = decoded_answer_pred_u + decoded_answer_pred_e            
+
                 answer_e = [normalize_answer(a) for a in decoded_answer_e]
                 answer_pred_e = [normalize_answer(a) for a in decoded_answer_pred_e]
-                errors_e = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_e, answer_pred_e)], device=scores_e.device)
+                # errors_e = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_e, answer_pred_e)], device=scores_e.device)
 
                 answer_u = [normalize_answer(a) for a in decoded_answer_u]
                 answer_pred_u = [normalize_answer(a) for a in decoded_answer_pred_u]
-                errors_u = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_u, answer_pred_u)], device=scores_e.device)
-                # print(errors.shape)
+                # errors_u = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_u, answer_pred_u)], device=scores_e.device)
 
+                # For SG-EM
                 answer_ue = [normalize_answer(a) for a in decoded_answer_ue]
                 answer_pred_ue = [normalize_answer(a) for a in decoded_answer_pred_ue]
-                errors_ue = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_ue, answer_pred_ue)], device=scores_e.device)
+                errors_ue = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_ue, answer_pred_ue)], device=scores_m1_ue.device)
 
                 # entail modl init & score computation
-                # entail_ld_u = self.entail_model.init_dataset_nli(
-                #     decoded_answer_pred_u,
-                #     # val1, val1+2 or val2.
-                #     'val1'
-                # )
-                # entail_ld_e = self.entail_model.init_dataset_nli(
-                #     decoded_answer_pred_e,
-                #     'val2'
-                # )
+                if params.entail_model in ["deberta-v2-xxlarge-mnli", None]:
+                    ent_probs_u = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd1])
+                    ent_labels_u = tc.hstack([tc.tensor([-1]) for lp in rd1]) # all labels are -1
+                    ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
+                    ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
 
-                # if self.params.cache_ent_fn:
-                #     cache_ent_fn_e = os.path.join(
-                #         self.params.cache_root,
-                #         f'{self.params.cache_ent_fn}-CAL2_E-{params.z_e}',
-                #     )
-                #     cache_ent_fn_u = os.path.join(
-                #         self.params.cache_root,
-                #         f'{self.params.cache_ent_fn}-CAL2-Z_U-{params.z_u}',
-                #     )
-                #     os.makedirs(os.path.dirname(cache_ent_fn_u), exist_ok=True)
-                # else:
-                #     cache_ent_fn_u = None
-                #     cache_ent_fn_e = None
-
-                # ent_scores_dict_e = self.precompute_entail_scores(entail_ld_e, cache_fn=cache_ent_fn_e)
-                # ent_scores_dict_u = self.precompute_entail_scores(entail_ld_u, cache_fn=cache_ent_fn_u)
+                    # mean, entail/(entail+contradict)
+                    scores_m2_u = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1])
+                    scores_m2_e = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd2])
+                    scores_m2_ue = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1_2])
                 
-                # ent_probs_e = 1 - ent_scores_dict_e['probs'][..., 0]
-                # ent_labels_e = ent_scores_dict_e['labels']
+                else:
+                    entail_ld_u = self.entail_model.init_dataset_nli(
+                        decoded_answer_pred_u,
+                        # val1, val1+2 or val2.
+                        'val1'
+                    )
+                    entail_ld_e = self.entail_model.init_dataset_nli(
+                        decoded_answer_pred_e,
+                        'val2'
+                    )
+                    entail_ld_sam_u = self.entail_model.init_sample_dataset_nli(
+                        decoded_answer_pred_u,
+                        'val1'
+                    )
+                    entail_ld_sam_e = self.entail_model.init_sample_dataset_nli(
+                        decoded_answer_pred_e,
+                        'val2'
+                    )
 
-                # ent_probs_u = 1 - ent_scores_dict_u['probs'][..., 0]
-                # ent_labels_u = ent_scores_dict_u['labels'] # all labels are -1
+                    if self.params.cache_ent_fn:
+                        cache_ent_fn_e = os.path.join(
+                            self.params.cache_root,
+                            f'{self.params.cache_ent_fn}-CAL2_ZE-{params.z_e}',
+                        )
+                        cache_ent_fn_u = os.path.join(
+                            self.params.cache_root,
+                            f'{self.params.cache_ent_fn}-CAL2-ZU-{params.z_u}',
+                        )
+                        cache_ent_fn_sam_e = os.path.join(
+                            self.params.cache_root,
+                            f'{self.params.cache_ent_fn}-CAL2-SAM-ZE-{params.z_e}',
+                        )
+                        cache_ent_fn_sam_u = os.path.join(
+                            self.params.cache_root,
+                            f'{self.params.cache_ent_fn}-CAL2-SAM-ZU-{params.z_u}',
+                        )
+                        os.makedirs(os.path.dirname(cache_ent_fn_u), exist_ok=True)
+                    else:
+                        cache_ent_fn_u = None
+                        cache_ent_fn_e = None
+                        cache_ent_fn_sam_u = None
+                        cache_ent_fn_sam_e = None
 
 
-                
-                ent_probs_u = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd1])
-                ent_labels_u = tc.hstack([tc.tensor([-1]) for lp in rd1]) # all labels are -1
-                ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
-                ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
+                    ent_scores_dict_e = self.precompute_entail_scores(entail_ld_e, cache_fn=cache_ent_fn_e)
+                    ent_scores_dict_u = self.precompute_entail_scores(entail_ld_u, cache_fn=cache_ent_fn_u)
+                    ent_scores_dict_sam_e = self.precompute_entail_scores(entail_ld_sam_e, cache_fn=cache_ent_fn_sam_e)
+                    ent_scores_dict_sam_u = self.precompute_entail_scores(entail_ld_sam_u, cache_fn=cache_ent_fn_sam_u)
+                    
+                    ent_probs_e = 1 - ent_scores_dict_e['probs'][..., 0]
+                    ent_labels_e = ent_scores_dict_e['labels']
+
+                    ent_probs_u = 1 - ent_scores_dict_u['probs'][..., 0]
+                    ent_labels_u = ent_scores_dict_u['labels'] # all labels are -1
+
+                    # mean, entail/(entail+contradict)
+                    sample_size = len(rd2[0]['samples'])
+                    ent_probs_sam_e = ent_scores_dict_sam_e['probs'].view(-1, sample_size, 3)
+                    ent_probs_sam_u = ent_scores_dict_sam_u['probs'].view(-1, sample_size, 3)
+                    
+                    scores_m2_u = (1 - ent_probs_sam_u[..., 0]).mean(dim=1)
+                    scores_m2_e = (1 - ent_probs_sam_e[..., 0]).mean(dim=1)
+                    scores_m2_ue = tc.cat([scores_m2_u, scores_m2_e], dim=0)
+
 
                 # For filtering, added this temporary lines. later will be fixed
                 ent_probs_ue = tc.cat([ent_probs_u, ent_probs_e], dim=0)
                 ent_labels_ue = tc.cat([ent_labels_u, ent_labels_e], dim=0)
 
-                # mean, e/(e+c)
-                scores_m2_u = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1])
-                scores_m2_e = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd2])
-                scores_m2_ue = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1_2])
-                # scores_u = tc.hstack([(tc.tensor(ss['samples_scores'])[..., 2] / (tc.tensor(ss['samples_scores'])[..., 0] + tc.tensor(ss['samples_scores'])[..., 2])).mean() for ss in rd1])
-                # scores = tc.hstack([(tc.tensor(ss['samples_scores'])[..., 2] / (tc.tensor(ss['samples_scores'])[..., 0] + tc.tensor(ss['samples_scores'])[..., 2])).mean() for ss in rd2])
-                scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
-                scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
-                scores_m1_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
-
-
-                # # f_E2
-                # ent_probs_e2_e = ent_scores_dict_e['probs'][..., 2] / (ent_scores_dict_e['probs'][..., 0] + ent_scores_dict_e['probs'][..., 2])
-                # ent_probs_e2_u = ent_scores_dict_u['probs'][..., 2] / (ent_scores_dict_u['probs'][..., 0] + ent_scores_dict_u['probs'][..., 2])
-
 
                 # Z_E,U
                 scores_m1_ue, i_sorted = scores_m1_ue.sort(descending=False)
-                errors_m1_ue = errors_ue[i_sorted]
-                ent_probs_m1_ue = ent_probs_ue[i_sorted]
-                ent_labels_m1_ue = ent_labels_ue[i_sorted]
-                # scores_m2_ue = scores_m2_ue[i_sorted]
                 scores_m2_ue, j_sorted = scores_m2_ue.sort(descending=False)
-                errors_m2_ue = errors_ue[j_sorted]
-                ent_probs_m2_ue = ent_probs_ue[i_sorted]
-                ent_labels_m2_ue = ent_labels_ue[i_sorted]
+                errors_m1_ue, errors_m2_ue = errors_ue[i_sorted], errors_ue[j_sorted]
+                ent_probs_m1_ue, ent_probs_m2_ue = ent_probs_ue[i_sorted], ent_probs_ue[j_sorted]
+                ent_labels_m1_ue, ent_labels_m2_ue = ent_labels_ue[i_sorted], ent_labels_ue[j_sorted]
 
-                # These sorts are for SGen_EL. because it does need sorted score.
+                # These sorts are for SGen-Sup because it does need sorted score.
                 scores_m1_EL, i_sorted = scores_m1_e.sort(descending=False)
-                ent_labels_m1_EL = ent_labels_e[i_sorted]
                 scores_m2_EL, j_sorted = scores_m2_e.sort(descending=False)
-                ent_labels_m2_EL = ent_labels_e[j_sorted]
+                ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_e[i_sorted], ent_labels_e[j_sorted]
 
                 # device
-                scores_m1_UE = scores_m1_ue.to(self.device)
-                scores_m2_UE = scores_m2_ue.to(self.device)
-                errors_m1_UE = errors_m1_ue.to(self.device)
-                errors_m2_UE = errors_m2_ue.to(self.device)
-                ent_probs_m1_UE = ent_probs_m1_ue.to(self.device)
-                ent_probs_m2_UE = ent_probs_m2_ue.to(self.device)
-                ent_labels_m1_UE = ent_labels_m1_ue.to(self.device)
-                ent_labels_m2_UE = ent_labels_m2_ue.to(self.device)
+                device = self.device
+                scores_m1_UE, scores_m2_UE = scores_m1_ue.to(device), scores_m2_ue.to(device)
+                errors_m1_UE, errors_m2_UE = errors_m1_ue.to(device), errors_m2_ue.to(device)
+                ent_probs_m1_UE, ent_probs_m2_UE = ent_probs_m1_ue.to(device), ent_probs_m2_ue.to(device)
+                ent_labels_m1_UE, ent_labels_m2_UE = ent_labels_m1_ue.to(device), ent_labels_m2_ue.to(device)
 
-                scores_m1_E = scores_m1_e.to(self.device)
-                scores_m2_E = scores_m2_e.to(self.device)
-                ent_probs_E = ent_probs_e.to(self.device)
-                ent_labels_E = ent_labels_e.to(self.device)
+                scores_m1_E, scores_m2_E = scores_m1_e.to(device), scores_m2_e.to(device)
+                ent_probs_E, ent_labels_E = ent_probs_e.to(device), ent_labels_e.to(device)
 
-                scores_m1_U = scores_m1_u.to(self.device)
-                scores_m2_U = scores_m2_u.to(self.device)
-                ent_probs_U = ent_probs_u.to(self.device)
+                scores_m1_U, scores_m2_U = scores_m1_u.to(device), scores_m2_u.to(device)
+                ent_probs_U = ent_probs_u.to(device)
 
-                scores_m1_EL = scores_m1_EL.to(self.device)
-                scores_m2_EL = scores_m2_EL.to(self.device)
-                ent_labels_m1_EL = ent_labels_m1_EL.to(self.device)
-                ent_labels_m2_EL = ent_labels_m2_EL.to(self.device)
+                scores_m1_EL, scores_m2_EL = scores_m1_EL.to(device), scores_m2_EL.to(device)
+                ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_m1_EL.to(device), ent_labels_m2_EL.to(device)
                 
                 
                 effs = {}
@@ -1991,7 +1949,7 @@ class SGLearner(SCGBaseLearner):
                     scores=scores_m1_UE,
                     eps=eps,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     errors=errors_m1_UE,
                     fer=fer,
                 )
@@ -2004,7 +1962,7 @@ class SGLearner(SCGBaseLearner):
                 print()
 
                 ## test
-                res = self.test(tau_s_opt, '[SGen-EM(f_M1)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen-EM(f_M1)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen-EM(f_M1)'] = eff
                 fdrs['SGen-EM(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2016,7 +1974,7 @@ class SGLearner(SCGBaseLearner):
                     scores=scores_m2_UE,
                     eps=eps,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     errors=errors_m2_UE,
                     fer=fer,
                 )
@@ -2029,14 +1987,14 @@ class SGLearner(SCGBaseLearner):
                 print()
 
                 ## test
-                res = self.test(tau_s_opt, '[SGen-EM(f_M2)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen-EM(f_M2)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen-EM(f_M2)'] = eff
                 fdrs['SGen-EM(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #            SGen-PL(f_M1)             #
+                #            SGen_PL-H-Semi(f_M1)             #
                 tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m1_UE,
                     scores_U=scores_m1_U,
@@ -2047,26 +2005,26 @@ class SGLearner(SCGBaseLearner):
                     eps=eps,
                     eps_e=eps_e,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-PL(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-PL(f_M1)'] = True
+                    print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_PL-H-Semi(f_M1)'] = True
                 else:
-                    print(f'[SGen-PL(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-PL(f_M1)'] = False
+                    print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_PL-H-Semi(f_M1)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-PL(f_M1)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-PL(f_M1)'] = eff
-                fdrs['SGen-PL(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_PL-H-Semi(f_M1)'] = eff
+                fdrs['SGen_PL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #            SGen-PL(f_M2)             #
+                #            SGen_PL-H-Semi(f_M2)             #
                 tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m2_UE,
                     scores_U=scores_m2_U,
@@ -2077,26 +2035,26 @@ class SGLearner(SCGBaseLearner):
                     eps=eps,
                     eps_e=eps_e,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-PL(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-PL(f_M2)'] = True
+                    print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_PL-H-Semi(f_M2)'] = True
                 else:
-                    print(f'[SGen-PL(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-PL(f_M2)'] = False
+                    print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_PL-H-Semi(f_M2)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-PL(f_M2)]', feat_idx=1, verbose=False)
+                res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-PL(f_M2)'] = eff
-                fdrs['SGen-PL(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_PL-H-Semi(f_M2)'] = eff
+                fdrs['SGen_PL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #       SGen-PL(f_M1, filtering)       #
+                #       SGen_PL-H-Semi(f_M1, filtering)       #
                 tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m1_UE,
                     scores_U=scores_m1_U,
@@ -2107,7 +2065,7 @@ class SGLearner(SCGBaseLearner):
                     eps=eps,
                     eps_e=eps_e,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     filtering=True,
                     ent_probs_UE=ent_probs_m1_UE,
                     ent_labels_UE=ent_labels_m1_UE,
@@ -2115,21 +2073,21 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-PL-filter(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-PL-filter(f_M1)'] = True
+                    print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_PFL-H-Semi(f_M1)'] = True
                 else:
-                    print(f'[SGen-PL-filter(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-PL-filter(f_M1)'] = False
+                    print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_PFL-H-Semi(f_M1)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-PL-filter(f_M1)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-PL-filter(f_M1)'] = eff
-                fdrs['SGen-PL-filter(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_PFL-H-Semi(f_M1)'] = eff
+                fdrs['SGen_PFL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #       SGen-PL(f_M2, filtering)       #
+                #       SGen_PL-H-Semi(f_M2, filtering)       #
                 tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m2_UE,
                     scores_U=scores_m2_U,
@@ -2140,7 +2098,7 @@ class SGLearner(SCGBaseLearner):
                     eps=eps,
                     eps_e=eps_e,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     filtering=True,
                     ent_probs_UE=ent_probs_m2_UE,
                     ent_labels_UE=ent_labels_m2_UE,
@@ -2148,21 +2106,21 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-PL-filter(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-PL-filter(f_M2)'] = True
+                    print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_PFL-H-Semi(f_M2)'] = True
                 else:
-                    print(f'[SGen-PL-filter(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-PL-filter(f_M2)'] = False
+                    print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_PFL-H-Semi(f_M2)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-PL-filter(f_M2)]', feat_idx=1, verbose=False)
+                res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-PL-filter(f_M2)'] = eff
-                fdrs['SGen-PL-filter(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_PFL-H-Semi(f_M2)'] = eff
+                fdrs['SGen_PFL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #             CSGen(f_M1)              #
+                #             SGen_NoMS-Semi(f_M1)              #
                 tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m1_UE,
                     scores_U=scores_m1_U,
@@ -2175,27 +2133,27 @@ class SGLearner(SCGBaseLearner):
                     delta_s=delta_s,
                     delta_e=delta_e,
                     delta_p=delta_p,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                     K=K,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[CSGen(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['CSGen(f_M1)'] = True
+                    print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_NoMS-Semi(f_M1)'] = True
                 else:
-                    print(f'[CSGen(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['CSGen(f_M1)'] = False
+                    print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_NoMS-Semi(f_M1)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[CSGen(f_M1)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['CSGen(f_M1)'] = eff
-                fdrs['CSGen(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_NoMS-Semi(f_M1)'] = eff
+                fdrs['SGen_NoMS-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #             CSGen(f_M2)              #
+                #             SGen_NoMS-Semi(f_M2)              #
                 tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m2_UE,
                     scores_U=scores_m2_U,
@@ -2208,79 +2166,79 @@ class SGLearner(SCGBaseLearner):
                     delta_s=delta_s,
                     delta_e=delta_e,
                     delta_p=delta_p,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                     K=K,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[CSGen(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['CSGen(f_M2)'] = True
+                    print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_NoMS-Semi(f_M2)'] = True
                 else:
-                    print(f'[CSGen(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['CSGen(f_M2)'] = False
+                    print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_NoMS-Semi(f_M2)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[CSGen(f_M2)]', feat_idx=1, verbose=False)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['CSGen(f_M2)'] = eff
-                fdrs['CSGen(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_NoMS-Semi(f_M2)'] = eff
+                fdrs['SGen_NoMS-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
 
                 ############################################
-                #            SGen_EL(f_M1)             #
+                #            SGen-Sup(f_M1)             #
                 tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                     # ent_labels=ent_labels_E1, # this is implemented in errors.
                     scores=scores_m1_EL,
                     eps=eps,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     errors=(ent_labels_m1_EL==0),
                     fer=fer,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-EL(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-EL(f_M1)'] = True
+                    print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen-Sup(f_M1)'] = True
                 else:
-                    print(f'[SGen-EL(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-EL(f_M1)'] = False
+                    print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen-Sup(f_M1)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-EL(f_M1)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen-Sup(f_M1)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-EL(f_M1)'] = eff
-                fdrs['SGen-EL(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen-Sup(f_M1)'] = eff
+                fdrs['SGen-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
-                #            SGen_EL(f_M2)             #
+                #            SGen-Sup(f_M2)             #
                 tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                     # ent_labels=ent_labels_E2, # this is implemented in errors.
                     scores=scores_m2_EL,
                     eps=eps,
                     delta=delta,
-                    verbose=False,
+                    verbose=params.verbose,
                     errors=(ent_labels_m2_EL==0),
                     fer=fer,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-EL(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-EL(f_M2)'] = True
+                    print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen-Sup(f_M2)'] = True
                 else:
-                    print(f'[SGen-EL(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-EL(f_M2)'] = False
+                    print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen-Sup(f_M2)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-EL(f_M2)]', feat_idx=1, verbose=False)
+                res = self.test(tau_s_opt, '[SGen-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-EL(f_M2)'] = eff
-                fdrs['SGen-EL(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen-Sup(f_M2)'] = eff
+                fdrs['SGen-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
 
                 ############################################
-                #               CSGen_NS               #
+                #               SGen-Semi               #
                 #          with new decomposition          #
                 tau_s_opt, feat_idx, U_min_opt = SG_MS.train(
                     scores_m1_UE=scores_m1_UE,
@@ -2297,57 +2255,25 @@ class SGLearner(SCGBaseLearner):
                     delta_s=delta_s,
                     delta_e=delta_e,
                     delta_p=delta_p,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                     K=K,
                 )
-                if_failed['CSGen-NS'] = True if U_min_opt <= eps else False
+                if_failed['SGen_NoMS-Semi-NS'] = True if U_min_opt <= eps else False
 
                 
-                res = self.test(tau_s_opt, '[CSGen_NS]', feat_idx, verbose=False)
+                res = self.test(tau_s_opt, '[SGen-Semi]', feat_idx, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['CSGen-NS'] = eff
-                fdrs['CSGen-NS'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
-                # print('#'*20)
-                print()
-                ############################################
-                ############################################
-                #             CSGen_NS_eff             #
-                #          with new decomposition          #
-                tau_s_opt, feat_idx, U_min_opt = SG_MS.train(
-                    scores_m1_UE=scores_m1_UE,
-                    scores_m2_UE=scores_m2_UE,
-                    scores_m1_E=scores_m1_E,
-                    scores_m2_E=scores_m2_E,
-                    ent_probs_E=ent_probs_E,
-                    ent_labels_E=ent_labels_E,
-                    scores_m1_U=scores_m1_U,
-                    scores_m2_U=scores_m2_U,
-                    ent_probs_U=ent_probs_U,
-                    eps=eps,
-                    eps_e=eps_e,
-                    delta_s=delta_s,
-                    delta_e=delta_e,
-                    delta_p=delta_p,
-                    verbose=False,
-                    fer=fer,
-                    K=K,
-                )
-                if_failed['CSGen-NS-eff'] = True if U_min_opt <= eps else False
-
-                
-                res = self.test(tau_s_opt, '[CSGen_NS_eff]', feat_idx, verbose=False)
-                eff = res["sel_test"].float().mean()
-                effs['CSGen-NS-eff'] = eff
-                fdrs['CSGen-NS-eff'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_NoMS-Semi-NS'] = eff
+                fdrs['SGen_NoMS-Semi-NS'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 # print('#'*20)
                 print()
                 ############################################
 
-                # CSGen-Sup
+                # SGen_NoMS-Semi-Sup
                 # 
                 ############################################
-                #           CSGen-Sup(f_M1)            #
+                #           SGen_NoMS-Semi-Sup(f_M1)            #
                 tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m1_E,
                     scores_U=None,
@@ -2360,27 +2286,27 @@ class SGLearner(SCGBaseLearner):
                     delta_s=delta_s,
                     delta_e=delta_e,
                     delta_p=delta_p,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                     K=K,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[CSGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['CSGen-Sup(f_M1)'] = True
+                    print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = True
                 else:
-                    print(f'[CSGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['CSGen-Sup(f_M1)'] = False
+                    print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[CSGen-Sup(f_M1)]', verbose=False)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['CSGen-Sup(f_M1)'] = eff
-                fdrs['CSGen-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_NoMS-Semi-Sup(f_M1)'] = eff
+                fdrs['SGen_NoMS-Semi-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
-                #           CSGen-Sup(f_M2)            #
+                #           SGen_NoMS-Semi-Sup(f_M2)            #
                 tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m2_E,
                     scores_U=None,
@@ -2393,23 +2319,23 @@ class SGLearner(SCGBaseLearner):
                     delta_s=delta_s,
                     delta_e=delta_e,
                     delta_p=delta_p,
-                    verbose=False,
+                    verbose=params.verbose,
                     fer=fer,
                     K=K,
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[CSGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['CSGen-Sup(f_M2)'] = True
+                    print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = True
                 else:
-                    print(f'[CSGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['CSGen-Sup(f_M2)'] = False
+                    print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = False
                 print()
                 ## test
-                res = self.test(tau_s_opt, '[CSGen-Sup(f_M2)]', feat_idx=1, verbose=False)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['CSGen-Sup(f_M2)'] = eff
-                fdrs['CSGen-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_NoMS-Semi-Sup(f_M2)'] = eff
+                fdrs['SGen_NoMS-Semi-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
 
@@ -2456,20 +2382,6 @@ class SG_MS(SCGBaseLearner):
         scores_m1_U,
         scores_m2_U,
         ent_probs_U,
-        # scores_m1_E1,
-        # scores_m2_E1,
-        # ent_probs_E1,
-        # ent_labels_E1,
-        # scores_m1_E2,
-        # scores_m2_E2,
-        # ent_probs_E2,
-        # ent_labels_E2,
-        # scores_m1_U1,
-        # scores_m2_U1,
-        # ent_probs_U1,
-        # scores_m1_U2,
-        # scores_m2_U2,
-        # ent_probs_U2,
         eps,
         eps_e,
         delta_s,
@@ -2494,7 +2406,7 @@ class SG_MS(SCGBaseLearner):
             delta_s=delta_s/3,
             delta_e=delta_e/3,
             delta_p=delta_p/3,
-            verbose=False,
+            verbose=verbose,
             fer=fer,
             K=K,
         )
@@ -2505,9 +2417,9 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 0
 
         if U_min_opt1 <= eps:
-            print(f'[CSGen_NS-1 success] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) <= eps (={eps}), efficiency = {eff_opt1}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen-Semi-1 success] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) <= eps (={eps}), efficiency = {eff_opt1}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[CSGen_NS-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen-Semi-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
         tau_s_opt, U_j_opt2, U_min_opt2, eff_opt2 = SG_Semi.train(
             scores_UE=scores_m2_UE,
@@ -2521,7 +2433,7 @@ class SG_MS(SCGBaseLearner):
             delta_s=delta_s/3,
             delta_e=delta_e/3,
             delta_p=delta_p/3,
-            verbose=False,
+            verbose=verbose,
             fer=fer,
             K=K,
         )
@@ -2532,9 +2444,9 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 1
 
         if U_min_opt2 <= eps:
-            print(f'[CSGen_NS-2 success] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) <= eps (={eps}), efficiency = {eff_opt2}, tau = {tau_s_opt}') # U_min?
+            print(f'[SGen-Semi-2 success] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) <= eps (={eps}), efficiency = {eff_opt2}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[CSGen_NS-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen-Semi-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
         tau_s_i_opt, tau_s_j_opt, U_j_opt3, U_min_opt3, eff_opt3 = SG_Semi2.train(
             scores_m1_UE=scores_m1_UE,
@@ -2551,7 +2463,7 @@ class SG_MS(SCGBaseLearner):
             delta_s=delta_s/3,
             delta_e=delta_e/3,
             delta_p=delta_p/3,
-            verbose=False,
+            verbose=verbose,
             fer=fer,
             K=K,
         )
@@ -2562,15 +2474,15 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 2
 
         if U_min_opt3 <= eps:
-            print(f'[CSGen_NS-3 success] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) <= eps (={eps}), efficiency = {eff_opt3}, tau = {(tau_s_i_opt, tau_s_j_opt)}') # U_min?
+            print(f'[SGen-Semi-3 success] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) <= eps (={eps}), efficiency = {eff_opt3}, tau = {(tau_s_i_opt, tau_s_j_opt)}') # U_min?
         else:
-            print(f'[CSGen_NS-3 fail] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen-Semi-3 fail] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
 
         
         if min(U_min_opt1, U_min_opt2, U_min_opt3) > eps:
             feat_idx = [U_j_opt1, U_j_opt2, U_j_opt3].index(min([U_j_opt1, U_j_opt2, U_j_opt3]))
-            print(f'[CSGen_NS fail] U_min (={min(U_min_opt1, U_min_opt2, U_min_opt3):.4e}) <= eps (={eps}), tau = {tau_s_opt}')
+            print(f'[SGen-Semi fail] U_min (={min(U_min_opt1, U_min_opt2, U_min_opt3):.4e}) <= eps (={eps}), tau = {tau_s_opt}')
         
         tau_s_opt = temp[feat_idx]
 
@@ -2736,11 +2648,11 @@ class SG_Semi2(SCGBaseLearner):
                     j_max = j_cur
                 else:
                     j_min = j_cur
-            U_min = min(U_min, U_min_i)
-            # if (U_min_i <= U_min and U_min > eps) or (U_min_i > U_min and U_min_i <= eps):
-            #     U_min_i_cur = i_cur
-            #     U_min_j_cur = j_cur
-            #     U_min = U_min_i
+
+            if (U_min_i <= U_min and U_min > eps):
+                U_min_i_cur = i_cur
+                U_min_j_cur = j_cur
+                U_min = U_min_i
             
             if U_min_i <= eps:
                 i_max = i_cur
@@ -2779,7 +2691,7 @@ class SG_Semi2(SCGBaseLearner):
     
 
 # heuristic tau_E
-# SGen-PL
+# SGen_PL-H-Semi
 class SG_Heuristic(SCGBaseLearner):
     
     def __init__(self, model, entail_model, params=None, name_postfix=None):
@@ -2915,10 +2827,6 @@ class SG_Baseline(SCGBaseLearner):
 
 
         tau_s_opt = scores[i_cur]
-        U_end = U
-        # if i_min != i_max:
-        #     warnings.warn(f'i_min ({i_min}) and i_max ({i_max}) are not the same.')
-        # assert i_min == i_max
 
         if U_min > eps:
             tau_s_opt = scores[U_min_cur]

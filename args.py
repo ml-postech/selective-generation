@@ -241,7 +241,7 @@ class UncertaintyTrainingArguments(Arguments, TrainingArguments):
     rerun: Optional[bool] = field(default=False)
     resume: Optional[bool] = field(default=False)
     load_final: Optional[bool] = field(default=True)
-    verbose: Optional[bool] = field(default=True)
+    verbose: Optional[bool] = field(default=False)
     device: Optional[str] = field(default='cuda')
     
     # n_cal: Optional[int] = field(default=None) #1_000_000

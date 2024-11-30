@@ -99,13 +99,22 @@ def init_datasets_qna(data_args, model_args, training_args):
     # For the purpose of init_dataset_nli(). (also 'val2')
     # val1 for unlabeled train dataset, val2 for labeled train dataset.
     raw_datasets['val1'] = raw_datasets['train']
-
     raw_datasets['val2'] = raw_datasets['validation']
+
+    z_u = min(len(raw_datasets['val1']), training_args.z_u)
+    z_e = int(0.75 * len(raw_datasets['val2'])) if training_args.exp_method == 'SSL' else len(raw_datasets['val2'])
+    raw_datasets['val1'] = raw_datasets['val1'].shuffle(training_args.seed).select(range(z_u)) if not training_args.method.endswith('QuanPlot') else raw_datasets['val1'].shuffle(training_args.seed)
+    raw_datasets['val2'] = raw_datasets['val2'].shuffle(training_args.seed).select(range(z_e))
+
+    print('Z_U size:', z_u)
+    print('Z_E size:', z_e)
     raw_datasets['val1+2'] = concatenate_datasets([raw_datasets['val1'], raw_datasets['val2']])
 
+    
+
     # if 'logprobs' in the dataset.
-    # if 'logprobs' in raw_datasets['test'].column_names and raw_datasets['test'][0]['logprobs'] is not None or model_args.model_name_or_path.startswith('gpt'):
-    #     return None, raw_datasets, None, None
+    if 'logprobs' in raw_datasets['test'].column_names and raw_datasets['test'][0]['logprobs'] is not None or model_args.model_name_or_path.startswith('gpt'):
+        return None, raw_datasets, None, None
 
     tokenizer = init_tokenizer(model_args)
     
@@ -192,28 +201,9 @@ def init_datasets_qna(data_args, model_args, training_args):
         return batch, label  #(x, y) format
     
 
-    # dataset stats
-    # if training_args.n_train_max:
-    #     tokenized_datasets['train'] = tokenized_datasets['train'].shuffle(seed=training_args.seed).select(
-    #         range(min(len(tokenized_datasets['train']), training_args.n_train_max))
-    #     )
-    #     #raw too
-    #     raw_datasets['train'] = raw_datasets['train'].shuffle(seed=training_args.seed).select(
-    #         range(min(len(raw_datasets['train']), training_args.n_train_max))
-    #     )
-        
-    # TODO do not split?
     tokenized_datasets['val1'] = tokenized_datasets['train']
-    # train_split = tokenized_datasets['train'].train_test_split(test_size=0.5, shuffle=False)
-    # tokenized_datasets['train'] = train_split['train']
-    # tokenized_datasets['val1'] = train_split['test']
-
 
     tokenized_datasets['val2'] = tokenized_datasets['validation']
-
-    # raw_datasets['test'] = raw_datasets['test'].select(range(min(len(raw_datasets['test']), training_args.n_test_max))) # Same reason as in n_cal.
-    # tokenized_datasets['test'] = tokenized_datasets['test'].select(range(min(len(tokenized_datasets['test']), training_args.n_test_max)))
-
     tokenized_datasets['val1+2'] = concatenate_datasets([tokenized_datasets['val1'], tokenized_datasets['val2']])
     
     
