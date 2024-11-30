@@ -1,5 +1,5 @@
 #!/bin/bash
-TAG=NIPSL24
+TAG=NIPS24
 NEXP=1
 
 EPS=0.15
@@ -60,6 +60,7 @@ EXP=${EXPS[$i_exp]}
 			--output_dir snapshots/${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-EXP-${i_exp} \
 			--method $METHOD \
 			--eps ${EPS} \
+			--entail_model ${EMDLNAME} \
 			--entail_model_name_or_path ${EMDLPATH} \
 			--cache_ent_fn "ENT"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD}-${NEXP} \
 			--cache_ent_eval_fn "ENTEVAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD}-${NEXP} \

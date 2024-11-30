@@ -50,8 +50,6 @@ class nli(datasets.GeneratorBasedBuilder):
                 'entail_scores': datasets.Sequence(datasets.Value("float32")),
                 'samples': datasets.Sequence(datasets.Value("string")),
                 'samples_scores': datasets.Sequence(datasets.Sequence(datasets.Value("float32"))),
-                'left_entail_scores': datasets.Sequence(datasets.Value("float32")),
-                'left_samples_scores': datasets.Sequence(datasets.Sequence(datasets.Value("float32"))),
             }
         )
         
@@ -166,9 +164,9 @@ class nli(datasets.GeneratorBasedBuilder):
                     'logprobs': nli_dict['logprobs'] if 'logprobs' in nli_dict else None,
                     'entail_scores': nli_dict['entail_scores'],
                     'samples': nli_dict['samples'],
-                    'samples_scores': nli_dict['samples_scores'],
-                    'left_entail_scores': nli_dict['left_entail_scores'] if 'left_entail_scores' in nli_dict else None,
-                    'left_samples_scores': nli_dict['left_samples_scores'] if 'left_samples_scores' in nli_dict else None,
+                    'samples_scores': nli_dict['samples_scores'] if 'samples_scores' in nli_dict else None,
+                    # 'left_entail_scores': nli_dict['left_entail_scores'] if 'left_entail_scores' in nli_dict else None,
+                    # 'left_samples_scores': nli_dict['left_samples_scores'] if 'left_samples_scores' in nli_dict else None,
                 }
             else:
                 raise NotImplementedError

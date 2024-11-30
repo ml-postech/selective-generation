@@ -64,12 +64,6 @@ def tokenize_function(tokenizer, examples):
     # tokenize
     output = tokenizer(examples['text'], truncation=True)
 
-    # # truncate long inputs
-    # output = {k: [v_i[-tokenizer.model_max_length:] for v_i in v] for k, v in output.items()}
-
-    #TODO: grouping?
-    # warnings.warn('groupping text for efficiency?')
-
     return output
 
 
@@ -102,19 +96,16 @@ def init_datasets_qna(data_args, model_args, training_args):
         trust_remote_code=True,
     )
 
-    # MJ: For the purpose of init_dataset_nli(). (also 'val2')
-    # MJ: 10k val1 train set.
-    # raw_train_split = raw_datasets['train'].train_test_split(test_size=0.5, shuffle=False)
-    # raw_datasets['train'] = raw_train_split['train']
-    # raw_datasets['val1'] = raw_train_split['test']
+    # For the purpose of init_dataset_nli(). (also 'val2')
+    # val1 for unlabeled train dataset, val2 for labeled train dataset.
     raw_datasets['val1'] = raw_datasets['train']
 
     raw_datasets['val2'] = raw_datasets['validation']
     raw_datasets['val1+2'] = concatenate_datasets([raw_datasets['val1'], raw_datasets['val2']])
 
-    # MJ: if 'logprobs'
-    if 'logprobs' in raw_datasets['test'].column_names and raw_datasets['test'][0]['logprobs'] is not None:
-        return None, raw_datasets, None, None
+    # if 'logprobs' in the dataset.
+    # if 'logprobs' in raw_datasets['test'].column_names and raw_datasets['test'][0]['logprobs'] is not None or model_args.model_name_or_path.startswith('gpt'):
+    #     return None, raw_datasets, None, None
 
     tokenizer = init_tokenizer(model_args)
     
@@ -138,31 +129,12 @@ def init_datasets_qna(data_args, model_args, training_args):
         tokenizer.max_length = tokenizer.model_max_length
     print(f'[dataset] model max length (from a tokenizer) = {tokenizer.max_length}')
     print(f'[dataset] voc size = {len(tokenizer)}')
-    # # check special tokens
-    # print('EOS token =', tokenizer.eos_token)
-    # print('Special tokens = ', tokenizer.additional_special_tokens, tokenizer.additional_special_tokens_ids)
-
-
-    # def tokenize_function(examples):
-    #     # concat
-    #     text_list = [q + tokenizer.additional_special_tokens[0] + a for q, a in zip(examples['question'], examples['answer'])]
-        
-    #     # tokenize
-    #     output = tokenizer(text_list)
-
-    #     # truncate long inputs
-    #     output = {k: [v_i[-tokenizer.max_length:] for v_i in v] for k, v in output.items()}
-        
-    #     return output
-
     
     def tokenize_function(examples):
 
-        # concat
         question_list = examples['question']
-        # MJ: CAUTION!!
-        # may not be used except for PEFT
-        answer_list = examples['answer']#examples['transformed_answer'] if ('transformed_answer' in examples) and (training_args.prompt_model_path is None) else examples['answer']
+        # CAUTION, this part may not be used except for PEFT
+        answer_list = examples['answer']
 
         # tokenize
         tokenized_questions = tokenizer(question_list, add_special_tokens=False)
@@ -197,7 +169,7 @@ def init_datasets_qna(data_args, model_args, training_args):
         for i in range(len(batch)):
             assert len(batch[i]['input_ids']) == len(batch[i]['attention_mask']) == len(batch[i]['answer_mask']), \
                 f"{len(batch[i]['input_ids'])} == {len(batch[i]['attention_mask'])} == {len(batch[i]['answer_mask'])}"
-            # MJ: left padding
+            # left padding
             n_pad = max_length_batch - len(batch[i]['input_ids'])
             input_ids.append(tc.tensor([pad_token_id]*n_pad + batch[i]['input_ids']))
             attention_mask.append(tc.tensor([0]*n_pad + batch[i]['attention_mask']))
@@ -207,10 +179,9 @@ def init_datasets_qna(data_args, model_args, training_args):
         answer_mask = tc.vstack(answer_mask)
 
 
-        # TODO MJ: Consider Truncation
-        input_ids = input_ids[:, -tokenizer.max_length+training_args.n_virtual_tokens:]
-        attention_mask = attention_mask[:, -tokenizer.max_length+training_args.n_virtual_tokens:]
-        answer_mask = answer_mask[:, -tokenizer.max_length+training_args.n_virtual_tokens:]
+        input_ids = input_ids[:, -tokenizer.max_length:]
+        attention_mask = attention_mask[:, -tokenizer.max_length:]
+        answer_mask = answer_mask[:, -tokenizer.max_length:]
 
         label = answer_mask
 
@@ -231,7 +202,7 @@ def init_datasets_qna(data_args, model_args, training_args):
     #         range(min(len(raw_datasets['train']), training_args.n_train_max))
     #     )
         
-    # TODO MJ: do not split?
+    # TODO do not split?
     tokenized_datasets['val1'] = tokenized_datasets['train']
     # train_split = tokenized_datasets['train'].train_test_split(test_size=0.5, shuffle=False)
     # tokenized_datasets['train'] = train_split['train']
@@ -240,7 +211,7 @@ def init_datasets_qna(data_args, model_args, training_args):
 
     tokenized_datasets['val2'] = tokenized_datasets['validation']
 
-    # raw_datasets['test'] = raw_datasets['test'].select(range(min(len(raw_datasets['test']), training_args.n_test_max))) # MJ: Same reason as in n_cal.
+    # raw_datasets['test'] = raw_datasets['test'].select(range(min(len(raw_datasets['test']), training_args.n_test_max))) # Same reason as in n_cal.
     # tokenized_datasets['test'] = tokenized_datasets['test'].select(range(min(len(tokenized_datasets['test']), training_args.n_test_max)))
 
     tokenized_datasets['val1+2'] = concatenate_datasets([tokenized_datasets['val1'], tokenized_datasets['val2']])
@@ -365,123 +336,117 @@ def main():
     transformers.utils.logging.enable_explicit_format()
     
 
+    # init datasets
+    tokenizer, raw_datasets, tokenized_datasets, dataloaders = init_datasets_qna(data_args, model_args, training_args)
+    # init a base model
+    if tokenizer is None:
+        base_model_config, base_model, wrapper_base_model = None, None, None        
+    else:
+        base_model_config, base_model, wrapper_base_model = init_model_qna(model_args, tokenizer)
+
     
-    if training_args.gen == 'learn_and_gen':
+    if training_args.method == 'GreedyGen-SG':
+        # Our algorithm
         
+        G = models.ConformalLG(
+            base_model=wrapper_base_model,
+            generation_type=training_args.gen_generation_type,
+            gen_len=training_args.gen_len,
+        )
 
-        # init datasets
-        tokenizer, raw_datasets, tokenized_datasets, dataloaders = init_datasets_qna(data_args, model_args, training_args)
-        # init a base model
-        if tokenizer is None:
-            base_model_config, base_model, wrapper_base_model = None, None, None        
-        else:
-            base_model_config, base_model, wrapper_base_model = init_model_qna(model_args, tokenizer)
+        EG = models.EntailmentSet(
+            model_args=model_args,
+            training_args=training_args,
+            data_args=data_args,
+            raw_datasets=raw_datasets,
+            #entail_model=wrapper_nli_model,
+            #generation_type=training_args.gen_generation_type,
+            #gen_len=training_args.gen_len,
+        ) 
 
+        # precision CP
+        SG = models.PrecisionSG(generator=G)
+        l = uncertainty.SGLearner(
+            SG,
+            EG,
+            params=training_args,
+            name_postfix='ncgprec'
+        )
+        l.train(
+            dataloaders['val1'] if dataloaders is not None else None, # deprecated
+            dataloaders['val2'] if dataloaders is not None else None, # deprecated
+            updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
+        )
+    elif training_args.method == 'GreedyGen-SGPlot':
         
-        if training_args.method == 'GreedyGen-SG':
-            # Our algorithm
-            
-            G = models.ConformalLG(
-                base_model=wrapper_base_model,
-                generation_type=training_args.gen_generation_type,
-                gen_len=training_args.gen_len,
-            )
+        # Our algorithm
+        
+        G = models.ConformalLG(
+            base_model=wrapper_base_model,
+            generation_type=training_args.gen_generation_type,
+            gen_len=training_args.gen_len,
+        )
 
-            EG = models.EntailmentSet(
-                model_args=model_args,
-                training_args=training_args,
-                data_args=data_args,
-                raw_datasets=raw_datasets,
-                #entail_model=wrapper_nli_model,
-                #generation_type=training_args.gen_generation_type,
-                #gen_len=training_args.gen_len,
-            ) 
+        EG = models.EntailmentSet(
+            model_args=model_args,
+            training_args=training_args,
+            data_args=data_args,
+            raw_datasets=raw_datasets,
+            #entail_model=wrapper_nli_model,
+            #generation_type=training_args.gen_generation_type,
+            #gen_len=training_args.gen_len,
+        ) 
 
-            # precision CP
-            SG = models.PrecisionSG(generator=G)
-            l = uncertainty.SGLearner(
-                SG,
-                EG,
-                params=training_args,
-                name_postfix='ncgprec'
-            )
-            l.train(
-                dataloaders['val1'] if dataloaders is not None else None, # deprecated
-                dataloaders['val2'] if dataloaders is not None else None, # deprecated
-                updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
-            )
-        elif training_args.method == 'GreedyGen-SGPlot':
-            
-            # Our algorithm
-            
-            G = models.ConformalLG(
-                base_model=wrapper_base_model,
-                generation_type=training_args.gen_generation_type,
-                gen_len=training_args.gen_len,
-            )
+        # precision CP
+        SG = models.PrecisionSG(generator=G)
+        l = uncertainty.SGLearner(
+            SG,
+            EG,
+            params=training_args,
+            name_postfix='ncgprec'
+        )
+        l.plot(
+            dataloaders['val1'] if dataloaders is not None else None, # deprecated
+            dataloaders['val2'] if dataloaders is not None else None, # deprecated
+            updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
+        )
+    elif training_args.method == 'GreedyGen-SGQuanPlot':
+        
+        # Our algorithm
+        
+        G = models.ConformalLG(
+            base_model=wrapper_base_model,
+            generation_type=training_args.gen_generation_type,
+            gen_len=training_args.gen_len,
+        )
 
-            EG = models.EntailmentSet(
-                model_args=model_args,
-                training_args=training_args,
-                data_args=data_args,
-                raw_datasets=raw_datasets,
-                #entail_model=wrapper_nli_model,
-                #generation_type=training_args.gen_generation_type,
-                #gen_len=training_args.gen_len,
-            ) 
+        EG = models.EntailmentSet(
+            model_args=model_args,
+            training_args=training_args,
+            data_args=data_args,
+            raw_datasets=raw_datasets,
+            #entail_model=wrapper_nli_model,
+            #generation_type=training_args.gen_generation_type,
+            #gen_len=training_args.gen_len,
+        ) 
 
-            # precision CP
-            SG = models.PrecisionSG(generator=G)
-            l = uncertainty.SGLearner(
-                SG,
-                EG,
-                params=training_args,
-                name_postfix='ncgprec'
-            )
-            l.plot(
-                dataloaders['val1'] if dataloaders is not None else None, # deprecated
-                dataloaders['val2'] if dataloaders is not None else None, # deprecated
-                updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
-            )
-        elif training_args.method == 'GreedyGen-SGQuanPlot':
-            
-            # Our algorithm
-            
-            G = models.ConformalLG(
-                base_model=wrapper_base_model,
-                generation_type=training_args.gen_generation_type,
-                gen_len=training_args.gen_len,
-            )
+        # precision CP
+        SG = models.PrecisionSG(generator=G)
+        l = uncertainty.SGLearner(
+            SG,
+            EG,
+            params=training_args,
+            name_postfix='ncgprec'
+        )
+        l.quan_plot(
+            dataloaders['val1'] if dataloaders is not None else None, # deprecated
+            dataloaders['val2'] if dataloaders is not None else None, # deprecated
+            updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
+        )
 
-            EG = models.EntailmentSet(
-                model_args=model_args,
-                training_args=training_args,
-                data_args=data_args,
-                raw_datasets=raw_datasets,
-                #entail_model=wrapper_nli_model,
-                #generation_type=training_args.gen_generation_type,
-                #gen_len=training_args.gen_len,
-            ) 
-
-            # precision CP
-            SG = models.PrecisionSG(generator=G)
-            l = uncertainty.SGLearner(
-                SG,
-                EG,
-                params=training_args,
-                name_postfix='ncgprec'
-            )
-            l.quan_plot(
-                dataloaders['val1'] if dataloaders is not None else None, # deprecated
-                dataloaders['val2'] if dataloaders is not None else None, # deprecated
-                updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
-            )
-
-        else:
-            raise NotImplementedError
-    
     else:
         raise NotImplementedError
+    
 
     
 if __name__ == "__main__":

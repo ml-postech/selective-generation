@@ -4,7 +4,7 @@ from pathlib import Path
 
 if __name__== '__main__':
 
-    root_dir = os.path.join(Path.home(), 'sg-llm/data/nli')
+    root_dir = os.path.join('data/nli')
     mdl = sys.argv[1]
     datasets = [sys.argv[2]]
 
@@ -18,13 +18,11 @@ if __name__== '__main__':
             'contradict': 0,
             None: None,
         }
-        # read
         data1 = []
         data2 = []
         for split_file1, split_file2 in zip(split_files1, split_files2):
             for nq, nq2 in zip(split_file1, split_file2):
                 if nq['label']:
-                    # print(nq)
                     data1.append(
                         {
                             'question': nq['question'],
@@ -35,12 +33,12 @@ if __name__== '__main__':
                             'labels': label_dict[nq['label']],
                             'logprobs': nq['logprobs'],
                             'samples': nq2['samples'],
-                            'samples_scores': nq2['samples_scores'],
-                            'left_entail_scores': nq['left_entail_scores'] if 'left_entail_scores' in nq else None,
-                            'left_samples_scores': nq2['left_samples_scores'] if 'left_samples_scores' in nq2 else None,
+                            'samples_scores': nq2['samples_scores'] if 'samples_scores' in nq2 else None,
+                            # 'left_entail_scores': nq['left_entail_scores'] if 'left_entail_scores' in nq else None,
+                            # 'left_samples_scores': nq2['left_samples_scores'] if 'left_samples_scores' in nq2 else None,
                         }
                     )
-                # deprecated?
+                # deprecated
                 else:
                     data2.append(
                         {
@@ -52,7 +50,6 @@ if __name__== '__main__':
                             'labels': None,
                         }
                     )
-                # if len(data1) == 3000: break
 
         print(f'# Labeled = {len(data1)}, Not labeled = {len(data2)}')
 

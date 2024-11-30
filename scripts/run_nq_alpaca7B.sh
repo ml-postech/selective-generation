@@ -1,5 +1,5 @@
 #!/bin/bash
-TAG=NIPSL24
+TAG=NIPS24
 NEXP=1
 
 EPS=0.25
@@ -16,18 +16,14 @@ K=5
 
 DATASETNAMELIST=(nli)
 DATASETCONFLIST=(nq_alpaca7B)
-# MDLNAMELIST=(gpt2 alpaca7B gpt2-medium gpt2-large llama7B llama13B)
-# MDLPATHLIST=(gpt2 ~/data/alpaca/7B gpt2-medium gpt2-large ~/data/llama/7B_hf ~/data/llama/13B_hf)
-# MDLNAMELIST=(gpt2)
-# MDLPATHLIST=(gpt2)
+
 MDLNAMELIST=(alpaca7B)
-MDLPATHLIST=(~/data/models/alpaca/7B)
+MDLPATHLIST=(~/data/models/alpaca/7B) # PATH_TO
 
 EMDLNAME=(deberta-v2-xxlarge-mnli)
 EMDLPATH=(microsoft/deberta-v2-xxlarge-mnli)
 
-# METHODLIST=(GreedyGen-PACPrec-EM GreedyGen-PACPrec-INC GreedyGen-EPACPrec GreedyGen-NCGPrec)
-# METHODLIST=(GreedyGen-NCGPrec GreedyGen-NCGPrec2 GreedyGen-EPACPrec)
+
 METHODLIST=(GreedyGen-SG)
 python data/nli/preprocess_u.py alpaca7B nq
 python data/nli/preprocess_e.py alpaca7B nq
@@ -64,6 +60,7 @@ EXP=${EXPS[$i_exp]}
 			--output_dir snapshots/${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-EXP-${i_exp} \
 			--method $METHOD \
 			--eps ${EPS} \
+			--entail_model ${EMDLNAME} \
 			--entail_model_name_or_path ${EMDLPATH} \
 			--cache_ent_fn "ENT"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD}-${NEXP} \
 			--cache_ent_eval_fn "ENTEVAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD}-${NEXP} \

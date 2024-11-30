@@ -4,7 +4,7 @@ from pathlib import Path
 
 if __name__== '__main__':
 
-    root_dir = os.path.join(Path.home(), 'sg-llm/data/nli')
+    root_dir = os.path.join('data/nli')
     mdl = sys.argv[1]
     datasets = [sys.argv[2]]
 
@@ -26,15 +26,14 @@ if __name__== '__main__':
                         'labels': None, # TEMP
                         'logprobs': nq['logprobs'],
                         'samples': nq2['samples'],
-                        'samples_scores': nq2['samples_scores'],
-                        'left_entail_scores': nq['left_entail_scores'] if 'left_entail_scores' in nq else None,
-                        'left_samples_scores': nq2['left_samples_scores'] if 'left_samples_scores' in nq2 else None,
+                        'samples_scores': nq2['samples_scores'] if 'samples_scores' in nq2 else None,
+                        # 'left_entail_scores': nq['left_entail_scores'] if 'left_entail_scores' in nq else None,
+                        # 'left_samples_scores': nq2['left_samples_scores'] if 'left_samples_scores' in nq2 else None,
                     }
                 )
                 if len(data) == 30000: break
         print(f'# data = {len(data)}')
 
         # write
-        data_jsonl = '\n'.join([json.dumps(d) for d in data])
-        #TODO MJ: directory
+        data_jsonl = '\n'.join([json.dumps(d) for d in data])        
         open(os.path.join(root_dir, f'{dataset}_{mdl}/nli.jsonl'), 'w').write(data_jsonl)

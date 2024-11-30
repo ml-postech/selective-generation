@@ -310,36 +310,37 @@ class SCGBaseLearner(SGBaseLearner):
                 # self.params.cache_ent_eval_fn + f'-{self.n_e}',
             )
             os.makedirs(os.path.dirname(cache_ent_fn), exist_ok=True)
+
         # pre-classification
-        # use 'entailment_scores' if exists?
         ent_output_list = []
-        # if ld is None:
-        #     step = self.params.per_device_eval_batch_size
-        #     for i in range(0, len(rd), step):
-        #         # scores = tc.hstack([tc.tensor(lp).mean().exp() for lp in rd[i:i+step]['logprobs']])
-        #         prob = [d for d in rd[i:i+step]['entail_scores']]
-        #         label = [d for d in rd[i:i+step]['labels']]
+        # we can use 'entailment_scores' in the dataset.
+        if self.params.entail_model in ["deberta-v2-xxlarge-mnli", None]:
+            step = self.params.per_device_eval_batch_size
+            for i in range(0, len(rd), step):
+                # scores = tc.hstack([tc.tensor(lp).mean().exp() for lp in rd[i:i+step]['logprobs']])
+                prob = [d for d in rd[i:i+step]['entail_scores']]
+                label = [d for d in rd[i:i+step]['labels']]
                 
-        #         ent_output_list.append(
-        #             {
-        #                 'probs':tc.tensor(prob),
-        #                 'labels':tc.tensor(label),
-        #             }
-        #         )
-        # el
-        if cache_ent_fn and os.path.exists(cache_ent_fn):
-            print(f'[pre-generation] loading precomputed generation results from {cache_ent_fn}')
-            ent_output_list = pickle.load(open(cache_ent_fn, 'rb'))
+                ent_output_list.append(
+                    {
+                        'probs':tc.tensor(prob),
+                        'labels':tc.tensor(label),
+                    }
+                )
         else:
-            for x, y in tqdm(entail_ld, desc="Precompute generation results"):
-                x = to_device(x, self.params.device)
-                
-                with tc.no_grad():
-                    output = self.entail_model.classify(x, y)
-                ent_output_list.append(to_device(output, 'cpu'))
-            if cache_ent_fn:
-                pickle.dump(ent_output_list, open(cache_ent_fn, 'wb'))
-                print(f'[pre-generation] saving precomputed generation results to {cache_ent_fn}')
+            if cache_ent_fn and os.path.exists(cache_ent_fn):
+                print(f'[pre-generation] loading precomputed generation results from {cache_ent_fn}')
+                ent_output_list = pickle.load(open(cache_ent_fn, 'rb'))
+            else:
+                for x, y in tqdm(entail_ld, desc="Precompute generation results"):
+                    x = to_device(x, self.params.device)
+                    
+                    with tc.no_grad():
+                        output = self.entail_model.classify(x, y)
+                    ent_output_list.append(to_device(output, 'cpu'))
+                if cache_ent_fn:
+                    pickle.dump(ent_output_list, open(cache_ent_fn, 'wb'))
+                    print(f'[pre-generation] saving precomputed generation results to {cache_ent_fn}')
         
 
         # compute metrics
@@ -366,10 +367,7 @@ class SCGBaseLearner(SGBaseLearner):
             answer_pred = output['answer_pred'] if 'answer_pred' in output else self.G.base_model.tokenizer.batch_decode(output['answer_ids_pred'], skip_special_tokens=True)
             q.extend(question)
             a.extend(answer)
-            a_pred.extend(answer_pred)
-            # q.extend(self.G.base_model.tokenizer.batch_decode(output['question_ids'], skip_special_tokens=True))
-            # a.extend(self.G.base_model.tokenizer.batch_decode(output['answer_ids'], skip_special_tokens=True))
-            # a_pred.extend(self.G.base_model.tokenizer.batch_decode(output['answer_ids_pred'], skip_special_tokens=True))        
+            a_pred.extend(answer_pred)       
 
 
         # concat
@@ -477,7 +475,7 @@ class SGLearner(SCGBaseLearner):
         super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
         
     
-    def train(self, ld_un, ld, updated_params=None):
+    def train(self, ld1, ld2, updated_params=None):
         # init params
         params = copy.deepcopy(self.params)
         if updated_params:
@@ -506,30 +504,12 @@ class SGLearner(SCGBaseLearner):
         print(f"# learn a prediction set: n = {n}, eps = {eps:.2e}, delta = {delta:.2e}")
 
         # load a pre-trained model
-        if not self.params.rerun and self._check_model(best=False, is_e=True):
-            if self.params.load_final:
-                self._load_model(best=False, is_e=True)
-            else:
-                self._load_model(best=True, is_e=True)
-            return True
-
-        # # map the model to a desired device
-        # if self.mdl.logtau_model:
-        #     self.mdl.logtau_model = self.mdl.logtau_model.to(self.params.device)
-        
-        if self.params.cache_cal_fn:
-            cache_fn = os.path.join(
-                self.params.cache_root,
-                f'{self.params.cache_cal_fn}-CAL2',
-            )
-            cache_fn_e = os.path.join(
-                self.params.cache_root,
-                f'{self.params.cache_cal_fn}-CAL2_E',
-            )
-            os.makedirs(os.path.dirname(cache_fn), exist_ok=True)
-        else:
-            cache_fn = None
-            cache_fn_e = None
+        # if not self.params.rerun and self._check_model(best=False, is_e=True):
+        #     if self.params.load_final:
+        #         self._load_model(best=False, is_e=True)
+        #     else:
+        #         self._load_model(best=True, is_e=True)
+        #     return True
 
 
         # if 'logprobs'
@@ -548,9 +528,9 @@ class SGLearner(SCGBaseLearner):
             self.entail_model.rd['val1+2'] = concatenate_datasets([rd1, rd2])
             rd1_2 = self.entail_model.rd['val1+2']
 
-            scores_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
-            scores_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
-            scores_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
+            scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
+            scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
+            scores_m1_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
 
             decoded_answer_u = [d['answer'] for d in rd1]
             decoded_answer_pred_u = [d['generated_answer'] for d in rd1]
@@ -560,128 +540,165 @@ class SGLearner(SCGBaseLearner):
 
             decoded_answer_ue = [d['answer'] for d in rd1_2]
             decoded_answer_pred_ue = [d['generated_answer'] for d in rd1_2]
+        
+        # Could be different from the answers in dataset if not greedy.
+        else:
+            if self.params.cache_cal_fn:
+                cache_fn = os.path.join(
+                    self.params.cache_root,
+                    f'{self.params.cache_cal_fn}-CAL2',
+                )
+                cache_fn_e = os.path.join(
+                    self.params.cache_root,
+                    f'{self.params.cache_cal_fn}-CAL2_E',
+                )
+                os.makedirs(os.path.dirname(cache_fn), exist_ok=True)
+            else:
+                cache_fn = None
+                cache_fn_e = None
+
+            scores_dict_u = self.precompute_scores(ld1, params.z_u, cache_fn=cache_fn)
+            scores_dict_e = self.precompute_scores(ld2, params.z_e, cache_fn=cache_fn_e)
+
+            scores_m1_u = tc.hstack([lp.mean().exp() for lp in scores_dict_u['logprobs_answer_pred']])
+            scores_m1_e = tc.hstack([lp.mean().exp() for lp in scores_dict_e['logprobs_answer_pred']])
+            scores_m1_ue = tc.cat([scores_m1_u, scores_m1_e], dim=0)
+
+            decoded_answer_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids'], skip_special_tokens=True)
+            decoded_answer_pred_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids_pred'], skip_special_tokens=True)
+            decoded_answer_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids'], skip_special_tokens=True)
+            decoded_answer_pred_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids_pred'], skip_special_tokens=True)
+            decoded_answer_pred_ue = decoded_answer_pred_u + decoded_answer_pred_e
          
         answer_e = [normalize_answer(a) for a in decoded_answer_e]
         answer_pred_e = [normalize_answer(a) for a in decoded_answer_pred_e]
-        errors_e = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_e, answer_pred_e)], device=scores_e.device)
+        # errors_e = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_e, answer_pred_e)], device=scores_e.device)
 
         answer_u = [normalize_answer(a) for a in decoded_answer_u]
         answer_pred_u = [normalize_answer(a) for a in decoded_answer_pred_u]
-        errors_u = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_u, answer_pred_u)], device=scores_e.device)
-        # print(errors.shape)
+        # errors_u = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_u, answer_pred_u)], device=scores_e.device)
 
+        # For SG-EM
         answer_ue = [normalize_answer(a) for a in decoded_answer_ue]
         answer_pred_ue = [normalize_answer(a) for a in decoded_answer_pred_ue]
-        errors_ue = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_ue, answer_pred_ue)], device=scores_e.device)
+        errors_ue = tc.tensor([not compute_EM(a_gold, a_pred) for a_gold, a_pred in zip(answer_ue, answer_pred_ue)], device=scores_m1_ue.device)
 
         # entail modl init & score computation
-        # entail_ld_u = self.entail_model.init_dataset_nli(
-        #     decoded_answer_pred_u,
-        #     # val1, val1+2 or val2.
-        #     'val1'
-        # )
-        # entail_ld_e = self.entail_model.init_dataset_nli(
-        #     decoded_answer_pred_e,
-        #     'val2'
-        # )
+        if params.entail_model in ["deberta-v2-xxlarge-mnli", None]:
+            ent_probs_u = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd1])
+            ent_labels_u = tc.hstack([tc.tensor([-1]) for lp in rd1]) # all labels are -1
+            ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
+            ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
 
-        # if self.params.cache_ent_fn:
-        #     cache_ent_fn_e = os.path.join(
-        #         self.params.cache_root,
-        #         f'{self.params.cache_ent_fn}-CAL2_E-{params.z_e}',
-        #     )
-        #     cache_ent_fn_u = os.path.join(
-        #         self.params.cache_root,
-        #         f'{self.params.cache_ent_fn}-CAL2-Z_U-{params.z_u}',
-        #     )
-        #     os.makedirs(os.path.dirname(cache_ent_fn_u), exist_ok=True)
-        # else:
-        #     cache_ent_fn_u = None
-        #     cache_ent_fn_e = None
-
-        # ent_scores_dict_e = self.precompute_entail_scores(entail_ld_e, cache_fn=cache_ent_fn_e)
-        # ent_scores_dict_u = self.precompute_entail_scores(entail_ld_u, cache_fn=cache_ent_fn_u)
+            # mean, entail/(entail+contradict)
+            scores_m2_u = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1])
+            scores_m2_e = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd2])
+            scores_m2_ue = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1_2])
         
-        # ent_probs_e = 1 - ent_scores_dict_e['probs'][..., 0]
-        # ent_labels_e = ent_scores_dict_e['labels']
+        else:
+            entail_ld_u = self.entail_model.init_dataset_nli(
+                decoded_answer_pred_u,
+                # val1, val1+2 or val2.
+                'val1'
+            )
+            entail_ld_e = self.entail_model.init_dataset_nli(
+                decoded_answer_pred_e,
+                'val2'
+            )
+            entail_ld_sam_u = self.entail_model.init_sample_dataset_nli(
+                decoded_answer_pred_u,
+                'val1'
+            )
+            entail_ld_sam_e = self.entail_model.init_sample_dataset_nli(
+                decoded_answer_pred_e,
+                'val2'
+            )
 
-        # ent_probs_u = 1 - ent_scores_dict_u['probs'][..., 0]
-        # ent_labels_u = ent_scores_dict_u['labels'] # all labels are -1
+            if self.params.cache_ent_fn:
+                cache_ent_fn_e = os.path.join(
+                    self.params.cache_root,
+                    f'{self.params.cache_ent_fn}-CAL2_ZE-{params.z_e}',
+                )
+                cache_ent_fn_u = os.path.join(
+                    self.params.cache_root,
+                    f'{self.params.cache_ent_fn}-CAL2-ZU-{params.z_u}',
+                )
+                cache_ent_fn_sam_e = os.path.join(
+                    self.params.cache_root,
+                    f'{self.params.cache_ent_fn}-CAL2-SAM-ZE-{params.z_e}',
+                )
+                cache_ent_fn_sam_u = os.path.join(
+                    self.params.cache_root,
+                    f'{self.params.cache_ent_fn}-CAL2-SAM-ZU-{params.z_u}',
+                )
+                os.makedirs(os.path.dirname(cache_ent_fn_u), exist_ok=True)
+            else:
+                cache_ent_fn_u = None
+                cache_ent_fn_e = None
+                cache_ent_fn_sam_u = None
+                cache_ent_fn_sam_e = None
 
-        
-        ent_probs_u = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd1])
-        ent_labels_u = tc.hstack([tc.tensor([-1]) for lp in rd1]) # all labels are -1
-        ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
-        ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
 
-        # TODO for filtering, added this temporary lines. later will be fixed
+            ent_scores_dict_e = self.precompute_entail_scores(entail_ld_e, cache_fn=cache_ent_fn_e)
+            ent_scores_dict_u = self.precompute_entail_scores(entail_ld_u, cache_fn=cache_ent_fn_u)
+            ent_scores_dict_sam_e = self.precompute_entail_scores(entail_ld_sam_e, cache_fn=cache_ent_fn_sam_e)
+            ent_scores_dict_sam_u = self.precompute_entail_scores(entail_ld_sam_u, cache_fn=cache_ent_fn_sam_u)
+            
+            ent_probs_e = 1 - ent_scores_dict_e['probs'][..., 0]
+            ent_labels_e = ent_scores_dict_e['labels']
+
+            ent_probs_u = 1 - ent_scores_dict_u['probs'][..., 0]
+            ent_labels_u = ent_scores_dict_u['labels'] # all labels are -1
+
+            # mean, entail/(entail+contradict)
+            sample_size = len(rd2[0]['samples'])
+            ent_probs_sam_e = ent_scores_dict_sam_e['probs'].view(-1, sample_size, 3)
+            ent_probs_sam_u = ent_scores_dict_sam_u['probs'].view(-1, sample_size, 3)
+            
+            scores_m2_u = (1 - ent_probs_sam_u[..., 0]).mean(dim=1)
+            scores_m2_e = (1 - ent_probs_sam_e[..., 0]).mean(dim=1)
+            scores_m2_ue = tc.cat([scores_m2_u, scores_m2_e], dim=0)
+
+
+        # For filtering, added this temporary lines. later will be fixed
         ent_probs_ue = tc.cat([ent_probs_u, ent_probs_e], dim=0)
         ent_labels_ue = tc.cat([ent_labels_u, ent_labels_e], dim=0)
-
-        # mean, e/(e+c)
-        scores_m2_u = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1])
-        scores_m2_e = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd2])
-        scores_m2_ue = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd1_2])
-        # scores_u = tc.hstack([(tc.tensor(ss['samples_scores'])[..., 2] / (tc.tensor(ss['samples_scores'])[..., 0] + tc.tensor(ss['samples_scores'])[..., 2])).mean() for ss in rd1])
-        # scores = tc.hstack([(tc.tensor(ss['samples_scores'])[..., 2] / (tc.tensor(ss['samples_scores'])[..., 0] + tc.tensor(ss['samples_scores'])[..., 2])).mean() for ss in rd2])
-        scores_m1_u = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1])
-        scores_m1_e = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd2])
-        scores_m1_ue = tc.hstack([tc.tensor(lp['logprobs']).mean().exp() for lp in rd1_2])
-
-
-        # # f_E2
-        # ent_probs_e2_e = ent_scores_dict_e['probs'][..., 2] / (ent_scores_dict_e['probs'][..., 0] + ent_scores_dict_e['probs'][..., 2])
-        # ent_probs_e2_u = ent_scores_dict_u['probs'][..., 2] / (ent_scores_dict_u['probs'][..., 0] + ent_scores_dict_u['probs'][..., 2])
 
 
         # Z_E,U
         scores_m1_ue, i_sorted = scores_m1_ue.sort(descending=False)
-        errors_m1_ue = errors_ue[i_sorted]
-        ent_probs_m1_ue = ent_probs_ue[i_sorted]
-        ent_labels_m1_ue = ent_labels_ue[i_sorted]
-        # scores_m2_ue = scores_m2_ue[i_sorted]
         scores_m2_ue, j_sorted = scores_m2_ue.sort(descending=False)
-        errors_m2_ue = errors_ue[j_sorted]
-        ent_probs_m2_ue = ent_probs_ue[i_sorted]
-        ent_labels_m2_ue = ent_labels_ue[i_sorted]
+        errors_m1_ue, errors_m2_ue = errors_ue[i_sorted], errors_ue[j_sorted]
+        ent_probs_m1_ue, ent_probs_m2_ue = ent_probs_ue[i_sorted], ent_probs_ue[j_sorted]
+        ent_labels_m1_ue, ent_labels_m2_ue = ent_labels_ue[i_sorted], ent_labels_ue[j_sorted]
 
         # These sorts are for SGen_EL because it does need sorted score.
         scores_m1_EL, i_sorted = scores_m1_e.sort(descending=False)
-        ent_labels_m1_EL = ent_labels_e[i_sorted]
         scores_m2_EL, j_sorted = scores_m2_e.sort(descending=False)
-        ent_labels_m2_EL = ent_labels_e[j_sorted]
+        ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_e[i_sorted], ent_labels_e[j_sorted]
 
         # device
-        scores_m1_UE = scores_m1_ue.to(self.device)
-        scores_m2_UE = scores_m2_ue.to(self.device)
-        errors_m1_UE = errors_m1_ue.to(self.device)
-        errors_m2_UE = errors_m2_ue.to(self.device)
-        ent_probs_m1_UE = ent_probs_m1_ue.to(self.device)
-        ent_probs_m2_UE = ent_probs_m2_ue.to(self.device)
-        ent_labels_m1_UE = ent_labels_m1_ue.to(self.device)
-        ent_labels_m2_UE = ent_labels_m2_ue.to(self.device)
+        device = self.device
+        scores_m1_UE, scores_m2_UE = scores_m1_ue.to(device), scores_m2_ue.to(device)
+        errors_m1_UE, errors_m2_UE = errors_m1_ue.to(device), errors_m2_ue.to(device)
+        ent_probs_m1_UE, ent_probs_m2_UE = ent_probs_m1_ue.to(device), ent_probs_m2_ue.to(device)
+        ent_labels_m1_UE, ent_labels_m2_UE = ent_labels_m1_ue.to(device), ent_labels_m2_ue.to(device)
 
-        scores_m1_E = scores_m1_e.to(self.device)
-        scores_m2_E = scores_m2_e.to(self.device)
-        ent_probs_E = ent_probs_e.to(self.device)
-        ent_labels_E = ent_labels_e.to(self.device)
+        scores_m1_E, scores_m2_E = scores_m1_e.to(device), scores_m2_e.to(device)
+        ent_probs_E, ent_labels_E = ent_probs_e.to(device), ent_labels_e.to(device)
 
-        scores_m1_U = scores_m1_u.to(self.device)
-        scores_m2_U = scores_m2_u.to(self.device)
-        ent_probs_U = ent_probs_u.to(self.device)
+        scores_m1_U, scores_m2_U = scores_m1_u.to(device), scores_m2_u.to(device)
+        ent_probs_U = ent_probs_u.to(device)
 
-        scores_m1_EL = scores_m1_EL.to(self.device)
-        scores_m2_EL = scores_m2_EL.to(self.device)
-        ent_labels_m1_EL = ent_labels_m1_EL.to(self.device)
-        ent_labels_m2_EL = ent_labels_m2_EL.to(self.device)
-        
+        scores_m1_EL, scores_m2_EL = scores_m1_EL.to(device), scores_m2_EL.to(device)
+        ent_labels_m1_EL, ent_labels_m2_EL = ent_labels_m1_EL.to(device), ent_labels_m2_EL.to(device)
+                                                                                              
+
         quali_tau_s = []
-        
-
         print()
         ############################################
         #            SGen_EM(f_M1)             #
-        tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+        tau_s_opt, U_min_opt, eff = SG_Baseline.train(
             scores=scores_m1_UE,
             eps=eps,
             delta=delta,
@@ -702,7 +719,7 @@ class SGLearner(SCGBaseLearner):
         print()
         ############################################
         #            SGen_EM(f_M2)             #
-        tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+        tau_s_opt, U_min_opt, eff = SG_Baseline.train(
             scores=scores_m2_UE,
             eps=eps,
             delta=delta,
@@ -723,7 +740,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #            SGen-PL(f_M1)             #
-        tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+        tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m1_UE,
             scores_U=scores_m1_U,
             ent_probs_U=ent_probs_U,
@@ -749,7 +766,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #            SGen-PL(f_M2)             #
-        tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+        tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m2_UE,
             scores_U=scores_m2_U,
             ent_probs_U=ent_probs_U,
@@ -775,7 +792,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #       SGen-PL(f_M1, filtering)       #
-        tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+        tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m1_UE,
             scores_U=scores_m1_U,
             ent_probs_U=ent_probs_U,
@@ -804,7 +821,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #       SGen-PL(f_M2, filtering)       #
-        tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+        tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
             scores_UE=scores_m2_UE,
             scores_U=scores_m2_U,
             ent_probs_U=ent_probs_U,
@@ -833,7 +850,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #             CSGen(f_M1)              #
-        tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+        tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m1_UE,
             scores_U=scores_m1_U,
             ent_probs_U=ent_probs_U,
@@ -862,7 +879,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #             CSGen(f_M2)              #
-        tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+        tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m2_UE,
             scores_U=scores_m2_U,
             ent_probs_U=ent_probs_U,
@@ -892,7 +909,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #            SGen_EL(f_M1)             #
-        tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+        tau_s_opt, U_min_opt, eff = SG_Baseline.train(
             # ent_labels=ent_labels_E1, # this is implemented in errors.
             scores=scores_m1_EL,
             eps=eps,
@@ -913,7 +930,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #            SGen_EL(f_M2)             #
-        tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+        tau_s_opt, U_min_opt, eff = SG_Baseline.train(
             # ent_labels=ent_labels_E2, # this is implemented in errors.
             scores=scores_m2_EL,
             eps=eps,
@@ -991,11 +1008,11 @@ class SGLearner(SCGBaseLearner):
         # print()
         ############################################
 
-        # TODO CSGen-Sup
+        # CSGen-Sup
         # 
         ############################################
         #           CSGen-Sup(f_M1)            #
-        tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+        tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m1_E,
             scores_U=None,
             ent_probs_U=None,
@@ -1024,7 +1041,7 @@ class SGLearner(SCGBaseLearner):
 
         ############################################
         #           CSGen-Sup(f_M2)            #
-        tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+        tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
             scores_UE = scores_m2_E,
             scores_U=None,
             ent_probs_U=None,
@@ -1083,12 +1100,12 @@ class SGLearner(SCGBaseLearner):
         print(f"# learn a prediction set: n = {n}, eps = {eps:.2e}, delta = {delta:.2e}")
 
         # load a pre-trained model
-        if not self.params.rerun and self._check_model(best=False, is_e=True):
-            if self.params.load_final:
-                self._load_model(best=False, is_e=True)
-            else:
-                self._load_model(best=True, is_e=True)
-            return True
+        # if not self.params.rerun and self._check_model(best=False, is_e=True):
+        #     if self.params.load_final:
+        #         self._load_model(best=False, is_e=True)
+        #     else:
+        #         self._load_model(best=True, is_e=True)
+        #     return True
         
         if self.params.cache_cal_fn:
             cache_fn = os.path.join(
@@ -1216,7 +1233,7 @@ class SGLearner(SCGBaseLearner):
             ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
             ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
 
-            # TODO for filtering, added this temporary lines. later will be fixed
+            # For filtering, added this temporary lines. later will be fixed
             ent_probs_ue = tc.cat([ent_probs_u, ent_probs_e], dim=0)
             ent_labels_ue = tc.cat([ent_labels_u, ent_labels_e], dim=0)
 
@@ -1285,7 +1302,7 @@ class SGLearner(SCGBaseLearner):
             print()
             ############################################
             #            SGen_EM(f_M1)             #
-            tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+            tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                 scores=scores_m1_UE,
                 eps=eps,
                 delta=delta,
@@ -1310,7 +1327,7 @@ class SGLearner(SCGBaseLearner):
             print()
             ############################################
             #            SGen_EM(f_M2)             #
-            tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+            tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                 scores=scores_m2_UE,
                 eps=eps,
                 delta=delta,
@@ -1335,7 +1352,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #            SGen-PL(f_M1)             #
-            tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+            tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m1_UE,
                 scores_U=scores_m1_U,
                 ent_probs_U=ent_probs_U,
@@ -1365,7 +1382,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #            SGen-PL(f_M2)             #
-            tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+            tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m2_UE,
                 scores_U=scores_m2_U,
                 ent_probs_U=ent_probs_U,
@@ -1395,7 +1412,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #       SGen-PL(f_M1, filtering)       #
-            tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+            tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m1_UE,
                 scores_U=scores_m1_U,
                 ent_probs_U=ent_probs_U,
@@ -1428,7 +1445,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #       SGen-PL(f_M2, filtering)       #
-            tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+            tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                 scores_UE=scores_m2_UE,
                 scores_U=scores_m2_U,
                 ent_probs_U=ent_probs_U,
@@ -1461,7 +1478,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #             CSGen(f_M1)              #
-            tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+            tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m1_UE,
                 scores_U=scores_m1_U,
                 ent_probs_U=ent_probs_U,
@@ -1494,7 +1511,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #             CSGen(f_M2)              #
-            tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+            tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m2_UE,
                 scores_U=scores_m2_U,
                 ent_probs_U=ent_probs_U,
@@ -1528,7 +1545,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #            SGen_EL(f_M1)             #
-            tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+            tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                 # ent_labels=ent_labels_E1, # this is implemented in errors.
                 scores=scores_m1_EL,
                 eps=eps,
@@ -1552,7 +1569,7 @@ class SGLearner(SCGBaseLearner):
             fdrs['SGen-EL(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
             #            SGen_EL(f_M2)             #
-            tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+            tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                 # ent_labels=ent_labels_E2, # this is implemented in errors.
                 scores=scores_m2_EL,
                 eps=eps,
@@ -1642,11 +1659,11 @@ class SGLearner(SCGBaseLearner):
             # print()
             ############################################
 
-            # TODO CSGen-Sup
+            # CSGen-Sup
             # 
             ############################################
             #           CSGen-Sup(f_M1)            #
-            tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+            tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m1_E,
                 scores_U=None,
                 ent_probs_U=None,
@@ -1679,7 +1696,7 @@ class SGLearner(SCGBaseLearner):
 
             ############################################
             #           CSGen-Sup(f_M2)            #
-            tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+            tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                 scores_UE = scores_m2_E,
                 scores_U=None,
                 ent_probs_U=None,
@@ -1760,17 +1777,13 @@ class SGLearner(SCGBaseLearner):
         print(f"# learn a prediction set: n = {n}, eps = {eps:.2e}, delta = {delta:.2e}")
 
         # load a pre-trained model
-        if not self.params.rerun and self._check_model(best=False, is_e=True):
-            if self.params.load_final:
-                self._load_model(best=False, is_e=True)
-            else:
-                self._load_model(best=True, is_e=True)
-            return True
+        # if not self.params.rerun and self._check_model(best=False, is_e=True):
+        #     if self.params.load_final:
+        #         self._load_model(best=False, is_e=True)
+        #     else:
+        #         self._load_model(best=True, is_e=True)
+        #     return True
 
-        # # map the model to a desired device
-        # if self.mdl.logtau_model:
-        #     self.mdl.logtau_model = self.mdl.logtau_model.to(self.params.device)
-        
         if self.params.cache_cal_fn:
             cache_fn = os.path.join(
                 self.params.cache_root,
@@ -1905,7 +1918,7 @@ class SGLearner(SCGBaseLearner):
                 ent_probs_e = tc.hstack([1 - tc.tensor(lp['entail_scores'][0]) for lp in rd2])
                 ent_labels_e = tc.hstack([tc.tensor(lp['labels']) for lp in rd2])
 
-                # TODO for filtering, added this temporary lines. later will be fixed
+                # For filtering, added this temporary lines. later will be fixed
                 ent_probs_ue = tc.cat([ent_probs_u, ent_probs_e], dim=0)
                 ent_labels_ue = tc.cat([ent_labels_u, ent_labels_e], dim=0)
 
@@ -1974,7 +1987,7 @@ class SGLearner(SCGBaseLearner):
                 print()
                 ############################################
                 #            SGen_EM(f_M1)             #
-                tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+                tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                     scores=scores_m1_UE,
                     eps=eps,
                     delta=delta,
@@ -1999,7 +2012,7 @@ class SGLearner(SCGBaseLearner):
                 print()
                 ############################################
                 #            SGen_EM(f_M2)             #
-                tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+                tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                     scores=scores_m2_UE,
                     eps=eps,
                     delta=delta,
@@ -2024,7 +2037,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #            SGen-PL(f_M1)             #
-                tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+                tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m1_UE,
                     scores_U=scores_m1_U,
                     ent_probs_U=ent_probs_U,
@@ -2054,7 +2067,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #            SGen-PL(f_M2)             #
-                tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+                tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m2_UE,
                     scores_U=scores_m2_U,
                     ent_probs_U=ent_probs_U,
@@ -2084,7 +2097,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #       SGen-PL(f_M1, filtering)       #
-                tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+                tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m1_UE,
                     scores_U=scores_m1_U,
                     ent_probs_U=ent_probs_U,
@@ -2117,7 +2130,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #       SGen-PL(f_M2, filtering)       #
-                tau_s_opt, U_min_opt, eff = SSLHeuristic.train(
+                tau_s_opt, U_min_opt, eff = SG_Heuristic.train(
                     scores_UE=scores_m2_UE,
                     scores_U=scores_m2_U,
                     ent_probs_U=ent_probs_U,
@@ -2150,7 +2163,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #             CSGen(f_M1)              #
-                tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+                tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m1_UE,
                     scores_U=scores_m1_U,
                     ent_probs_U=ent_probs_U,
@@ -2183,7 +2196,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #             CSGen(f_M2)              #
-                tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+                tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m2_UE,
                     scores_U=scores_m2_U,
                     ent_probs_U=ent_probs_U,
@@ -2217,7 +2230,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #            SGen_EL(f_M1)             #
-                tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+                tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                     # ent_labels=ent_labels_E1, # this is implemented in errors.
                     scores=scores_m1_EL,
                     eps=eps,
@@ -2241,7 +2254,7 @@ class SGLearner(SCGBaseLearner):
                 fdrs['SGen-EL(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
                 #            SGen_EL(f_M2)             #
-                tau_s_opt, U_min_opt, eff = EPACPrecisionSGLearner.train(
+                tau_s_opt, U_min_opt, eff = SG_Baseline.train(
                     # ent_labels=ent_labels_E2, # this is implemented in errors.
                     scores=scores_m2_EL,
                     eps=eps,
@@ -2331,11 +2344,11 @@ class SGLearner(SCGBaseLearner):
                 print()
                 ############################################
 
-                # TODO CSGen-Sup
+                # CSGen-Sup
                 # 
                 ############################################
                 #           CSGen-Sup(f_M1)            #
-                tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+                tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m1_E,
                     scores_U=None,
                     ent_probs_U=None,
@@ -2368,7 +2381,7 @@ class SGLearner(SCGBaseLearner):
 
                 ############################################
                 #           CSGen-Sup(f_M2)            #
-                tau_s_opt, U_j, U_min_opt, eff = SG1.train(
+                tau_s_opt, U_j, U_min_opt, eff = SG_Semi.train(
                     scores_UE = scores_m2_E,
                     scores_U=None,
                     ent_probs_U=None,
@@ -2469,7 +2482,7 @@ class SG_MS(SCGBaseLearner):
 
         U_opt = 0
         temp = []
-        tau_s_opt, U_j_opt1, U_min_opt1, eff_opt1 = SG1.train(
+        tau_s_opt, U_j_opt1, U_min_opt1, eff_opt1 = SG_Semi.train(
             scores_UE=scores_m1_UE,
             scores_U=scores_m1_U,
             ent_probs_U=ent_probs_U,
@@ -2496,7 +2509,7 @@ class SG_MS(SCGBaseLearner):
         else:
             print(f'[CSGen_NS-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
-        tau_s_opt, U_j_opt2, U_min_opt2, eff_opt2 = SG1.train(
+        tau_s_opt, U_j_opt2, U_min_opt2, eff_opt2 = SG_Semi.train(
             scores_UE=scores_m2_UE,
             scores_U=scores_m2_U,
             ent_probs_U=ent_probs_U,
@@ -2523,7 +2536,7 @@ class SG_MS(SCGBaseLearner):
         else:
             print(f'[CSGen_NS-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
-        tau_s_i_opt, tau_s_j_opt, U_j_opt3, U_min_opt3, eff_opt3 = SG2.train(
+        tau_s_i_opt, tau_s_j_opt, U_j_opt3, U_min_opt3, eff_opt3 = SG_Semi2.train(
             scores_m1_UE=scores_m1_UE,
             scores_m2_UE=scores_m2_UE,
             scores_m1_E=scores_m1_E,
@@ -2569,8 +2582,8 @@ class SG_MS(SCGBaseLearner):
 
 
 # Ours(revised) using over-approximating
-# SG1
-class SG1(SCGBaseLearner):
+# SG_Semi
+class SG_Semi(SCGBaseLearner):
     
     def __init__(self, model, entail_model, params=None, name_postfix=None):
         super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
@@ -2652,95 +2665,9 @@ class SG1(SCGBaseLearner):
         return tau_s_opt, U_j, U_min, ((scores_UE>=tau_s_opt).sum()/n)
 
 
-# heuristic tau_E
-# SGen-PL
-class SSLHeuristic(SCGBaseLearner):
-    
-    def __init__(self, model, entail_model, params=None, name_postfix=None):
-        super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
-    
-    @classmethod
-    def train(
-        cls,
-        scores_UE,
-        scores_U,
-        ent_probs_U,
-        ent_labels_E,
-        scores_E,
-        ent_probs_E,
-        eps,
-        eps_e,
-        delta,
-        verbose,
-        fer,
-        filtering=False,
-        ent_probs_UE=None,
-        ent_labels_UE=None,
-    ):
-        
-        tau_pl = 0.9 # temp
-        if filtering:
-            filter_idx_u = ((ent_probs_U >= tau_pl) | (1 - ent_probs_U >= tau_pl)).bool()
-            scores_U = scores_U[filter_idx_u]
-            ent_probs_U = ent_probs_U[filter_idx_u]
-
-            filter_idx_ue = ((ent_labels_UE == -1) * ((ent_probs_UE >= tau_pl) | (1 - ent_probs_UE >= tau_pl))).bool()
-            scores_UE = scores_UE[filter_idx_ue]
-            ent_probs_UE = ent_probs_UE[filter_idx_ue]
-
-            print('filterd:', filter_idx_u.sum())
-            assert filter_idx_u.sum() == filter_idx_ue.sum()
-        n = scores_UE.shape[0]
-        # binary search
-        i_min = 0
-        i_max = n-1
-        n_iters = int(np.ceil(np.log2(n))) + 1
-        U_min = float('inf')
-        U_min_cur = -1
-
-
-        for i in range(n_iters):
-            i_cur = int(np.ceil((i_min + i_max) / 2))
-            tau_s_opt = scores_UE[i_cur] # tau_S = f_M(x_i, G(x_i)). not neccessary?
-            n_j = (scores_UE >= tau_s_opt).sum()
-            k_j = ((ent_labels_E == 0) * (scores_E >= tau_s_opt)).sum() + ((ent_probs_U <= tau_pl) * (scores_U >= tau_s_opt)).sum() # the second term is for pseudo-labeling
-            
-            U_j = clopper_pearson_worst(k_j.item(), n_j.item(), delta/n_iters)
-            if U_j <= eps:
-                i_max = i_cur
-            else:
-                i_min = i_cur
-
-            if (U_j <= U_min):
-                U_min_cur = i_cur
-                U_min = U_j
-
-            if verbose:
-                # print(f'[success] tau_e = {tau_e_opt}') if tau_e_opt != float('inf') and tau_e_opt != 0 else print(f'[fail] tau_e = {tau_e_opt}')
-                print(
-                    f'[binary serach for tau_s] '
-                    f'tau = {scores_UE[i_cur]:.4e}, '
-                    f'U = {U_j:.4e}, '
-                    f'U_j = {U_j:.4e}, eps = {eps}, eps_e = {eps_e}, '
-                    f'SelGen(i_min, i_max) = ({i_min}, {i_max})')
-                print()
-
-        tau_s_opt = scores_UE[i_cur]
-
-        if U_min <= eps:
-            # print(f'[success] U (={U_j:.4e}) <= eps (={eps}), tau = {tau_s_opt}')
-            pass
-        else:
-            # print(f'[fail] U (={U_min:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-            tau_s_opt = scores_UE[U_min_cur]
-
-        # print(tau_s_opt, U_j, (n_j.item()/n))
-        # print(k_j/n_j)
-        return tau_s_opt, U_min, (n_j.item()/n)
-    
 # Ours(revised) using multi-tau
-# SG2
-class SG2(SCGBaseLearner):
+# SG_Semi2
+class SG_Semi2(SCGBaseLearner):
     
     def __init__(self, model, entail_model, params=None, name_postfix=None):
         super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
@@ -2850,22 +2777,100 @@ class SG2(SCGBaseLearner):
 
         return tau_s_i_opt, tau_s_j_opt, U_ij, U_min, (((scores_m1_UE >= tau_s_i) * (scores_m2_UE >= tau_s_j)).sum() / n)
     
-    
-# Baselines
-class EPACPrecisionSGLearner(SCGBaseLearner):
+
+# heuristic tau_E
+# SGen-PL
+class SG_Heuristic(SCGBaseLearner):
     
     def __init__(self, model, entail_model, params=None, name_postfix=None):
         super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
+    
+    @classmethod
+    def train(
+        cls,
+        scores_UE,
+        scores_U,
+        ent_probs_U,
+        ent_labels_E,
+        scores_E,
+        ent_probs_E,
+        eps,
+        eps_e,
+        delta,
+        verbose,
+        fer,
+        filtering=False,
+        ent_probs_UE=None,
+        ent_labels_UE=None,
+    ):
+        
+        tau_pl = 0.9 # temp. Adjust this value if you want to see other results of SG-PFL.
+        if filtering:
+            filter_idx_u = ((ent_probs_U >= tau_pl) | (1 - ent_probs_U >= tau_pl)).bool()
+            scores_U = scores_U[filter_idx_u]
+            ent_probs_U = ent_probs_U[filter_idx_u]
 
-        #self.G = self.mdl.G
+            filter_idx_ue = ((ent_labels_UE == -1) * ((ent_probs_UE >= tau_pl) | (1 - ent_probs_UE >= tau_pl))).bool()
+            scores_UE = scores_UE[filter_idx_ue]
+            ent_probs_UE = ent_probs_UE[filter_idx_ue]
+
+            print('filterd:', filter_idx_u.sum())
+            assert filter_idx_u.sum() == filter_idx_ue.sum()
+
+        n = scores_UE.shape[0]
+        # binary search
+        i_min = 0
+        i_max = n-1
+        n_iters = int(np.ceil(np.log2(n))) + 1
+        U_min = float('inf')
+        U_min_cur = -1
 
 
-    # def compute_error(self, logprob_list, logtau):
-    #     n_error = 0
-    #     for logprob_i in logprob_list:
-    #         n_error += (logprob_i < logtau).any()
+        for i in range(n_iters):
+            i_cur = int(np.ceil((i_min + i_max) / 2))
+            tau_s_opt = scores_UE[i_cur] # not neccessary
+            n_j = (scores_UE >= tau_s_opt).sum()
+            k_j = ((ent_labels_E == 0) * (scores_E >= tau_s_opt)).sum() + ((ent_probs_U <= tau_pl) * (scores_U >= tau_s_opt)).sum() # the second term is for pseudo-labeling
             
-    #     return n_error
+            U_j = clopper_pearson_worst(k_j.item(), n_j.item(), delta/n_iters)
+            if U_j <= eps:
+                i_max = i_cur
+            else:
+                i_min = i_cur
+
+            if (U_j <= U_min):
+                U_min_cur = i_cur
+                U_min = U_j
+
+            if verbose:
+                # print(f'[success] tau_e = {tau_e_opt}') if tau_e_opt != float('inf') and tau_e_opt != 0 else print(f'[fail] tau_e = {tau_e_opt}')
+                print(
+                    f'[binary serach for tau_s] '
+                    f'tau = {scores_UE[i_cur]:.4e}, '
+                    f'U = {U_j:.4e}, '
+                    f'U_j = {U_j:.4e}, eps = {eps}, eps_e = {eps_e}, '
+                    f'SelGen(i_min, i_max) = ({i_min}, {i_max})')
+                print()
+
+        tau_s_opt = scores_UE[i_cur]
+
+        if U_min <= eps:
+            # print(f'[success] U (={U_j:.4e}) <= eps (={eps}), tau = {tau_s_opt}')
+            pass
+        else:
+            # print(f'[fail] U (={U_min:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            tau_s_opt = scores_UE[U_min_cur]
+
+        # print(tau_s_opt, U_j, (n_j.item()/n))
+        # print(k_j/n_j)
+        return tau_s_opt, U_min, (n_j.item()/n)
+    
+    
+# Baselines
+class SG_Baseline(SCGBaseLearner):
+    
+    def __init__(self, model, entail_model, params=None, name_postfix=None):
+        super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
         
     @classmethod
     def train(
@@ -2885,11 +2890,10 @@ class EPACPrecisionSGLearner(SCGBaseLearner):
         TER_max = 0
         U_min = float('inf')
         U_min_cur = -1
-        # errors = (ent_labels == 0) # EM?
-        # print('여기', scores[-1])
+
         for i in range(n_iters):
             i_cur = int(np.ceil((i_min + i_max) / 2))
-            tau_s_opt = scores[i_cur] # tau_S = f_M(x_i, G(x_i)). not neccessary?
+            tau_s_opt = scores[i_cur] # not neccessary?
             n_j = (scores >= tau_s_opt).sum()
             k_j = (errors * (scores >= tau_s_opt)).sum()
             U = clopper_pearson_worst(k_j.item(), n_j.item(), delta/n_iters)
@@ -2897,8 +2901,6 @@ class EPACPrecisionSGLearner(SCGBaseLearner):
                 i_max = i_cur
             else:
                 i_min = i_cur
-            
-            # U_min = min(U_min, U)
 
             if (U <= U_min):
                 U_min_cur = i_cur
@@ -2916,13 +2918,10 @@ class EPACPrecisionSGLearner(SCGBaseLearner):
         U_end = U
         # if i_min != i_max:
         #     warnings.warn(f'i_min ({i_min}) and i_max ({i_max}) are not the same.')
-            #assert i_min == i_max
+        # assert i_min == i_max
 
-        if U_min <= eps:
-            # print(f'[success] U (={U_end:.4e}) <= eps (={eps}), tau = {tau_s_opt}')
-            pass
-        else:
-            # print(f'[Need adjustment] U_min (={U_min:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+        if U_min > eps:
             tau_s_opt = scores[U_min_cur]
+
         return tau_s_opt, U_min, (n_j.item()/n)
 

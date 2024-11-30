@@ -244,57 +244,59 @@ class UncertaintyTrainingArguments(Arguments, TrainingArguments):
     verbose: Optional[bool] = field(default=True)
     device: Optional[str] = field(default='cuda')
     
-    n_cal: Optional[int] = field(default=None) #1_000_000
+    # n_cal: Optional[int] = field(default=None) #1_000_000
     eps: Optional[float] = field(default=0.1)
     eps_e: Optional[float] = field(default=0.1)
     delta: Optional[float] = field(default=1e-5)
     delta_p: Optional[float] = field(default=1e-5)
-    n_train_max: Optional[int] = field(default=20_000) #100_000
-    n_test_max: Optional[int] = field(default=1_000) #10_000
-    topk: Optional[int] = field(default=50)
+    # n_train_max: Optional[int] = field(default=20_000) #100_000
+    # n_test_max: Optional[int] = field(default=1_000) #10_000
+    # topk: Optional[int] = field(default=50)
     exp_method: Optional[str] = field(default='SSL')
+    entail_model: Optional[str] = field(default=None)
 
     # prompt learning
-    #prompt_learning: Optional[str] = field(default='prompt_tuning')
-    n_virtual_tokens: Optional[int] = field(default=50)
+    # prompt_learning: Optional[str] = field(default='prompt_tuning')
+    # n_virtual_tokens: Optional[int] = field(default=50)
     
     # histogram binning
-    n_bins: Optional[int] = field(default=20)
+    # n_bins: Optional[int] = field(default=20)
 
-    optimizer: Optional[str] = field(default='Adam') ##TODO
-    n_epochs: Optional[int] = field(default=1)
-    lr: Optional[float] = field(default=1e-4)
-    #momentum: Optional[float] = field(default=0.0)
-    weight_decay: Optional[float] = field(default=0.0)
-    lr_decay_epoch: Optional[int] = field(default=1)
-    lr_decay_rate: Optional[float] = field(default=0.5)
-    lr_gamma: Optional[float] = field(default=0.99)
-    n_hidden_neurons: Optional[int] = field(default=4000)
-    dropout_prob: Optional[float] = field(default=0.5)
-    freeze_bias: Optional[bool] = field(default=False)
-    use_logsigmoid: Optional[bool] = field(default=False)
-    use_logspace: Optional[bool] = field(default=True)
+    # optimizer: Optional[str] = field(default='Adam') ##TODO
+    # n_epochs: Optional[int] = field(default=1)
+    # lr: Optional[float] = field(default=1e-4)
+    # #momentum: Optional[float] = field(default=0.0)
+    # weight_decay: Optional[float] = field(default=0.0)
+    # lr_decay_epoch: Optional[int] = field(default=1)
+    # lr_decay_rate: Optional[float] = field(default=0.5)
+    # lr_gamma: Optional[float] = field(default=0.99)
+    # n_hidden_neurons: Optional[int] = field(default=4000)
+    # dropout_prob: Optional[float] = field(default=0.5)
+    # freeze_bias: Optional[bool] = field(default=False)
+    # use_logsigmoid: Optional[bool] = field(default=False)
+    # use_logspace: Optional[bool] = field(default=True)
     
     
-    tau_step: Optional[float] = field(default=1e-16) 
-    tau_end: Optional[float] = field(default=1.0) # 1.0: assume classification
-    eps_tol: Optional[float] = field(default=1.25)
-    tau_tol: Optional[float] = field(default=1e-16)
+    # tau_step: Optional[float] = field(default=1e-16) 
+    # tau_end: Optional[float] = field(default=1.0) # 1.0: assume classification
+    # eps_tol: Optional[float] = field(default=1.25)
+    # tau_tol: Optional[float] = field(default=1e-16)
     
     num_workers: Optional[int] = field(default=64)
 
-    #TODO: create gen args
-    gen: Optional[str] = field(default='learn_and_gen')
-    gen_keywords: Optional[str] = field(default='')
+    # #TODO: create gen args
+    # gen: Optional[str] = field(default='learn_and_gen')
+    # gen_keywords: Optional[str] = field(default='')
     gen_generation_type: Optional[str] = field(default='greedy')
     gen_len: Optional[int] = field(default=50)
-    gen_samples: Optional[int] = field(default=0)
+    # gen_samples: Optional[int] = field(default=0)
 
     z_u: Optional[int] = field(default=30000)
     z_e: Optional[int] = field(default=10000)
     md_name: Optional[str] = field(default=None)
     fer: Optional[bool] = field(default=False)
     K: Optional[int] = field(default=5)
+    pl: Optional[float] = field(default=0.9)
 
     seed: Optional[int] = field(default=42)
     model: Optional[str] = field(default=None)
