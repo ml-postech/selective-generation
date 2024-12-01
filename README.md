@@ -2,48 +2,55 @@
 
 This repository contains the PyTorch implementation, which outputs evaluation results for the Neurips 2024 paper "[Selective Generation for Controllable Language Models](https://arxiv.org/abs/2307.09254)".
 
-## Enviroment Setup
+## Environment Setup
 
+If you use **conda**,
 ```
-# If you use conda
 conda create -n sg python=3.8
+conda activate sg
 pip install -r requirements.txt
 ```
 
-You might install extra dependency to run the model by your hands.
+Additional dependencies (e.g., PyTorch) may need to be installed depending on your system setup and hardware.
 
 ## Models
 
-If you are only going to use the model and dataset in the paper, there is no need to load the models because both logprobs and implication scores are stored in the dataset.
+If you are only going to use the models and datasets as provided in the paper, you do not need to load the models manually, as both log probabilities and entailment scores have been **precomputed and stored in the dataset**.
 
-Alpaca7B and GPT3.5-Turbo API were used as generators, and [deberta-v2-xxlarge fintuned on mnli dataset](https://github.com/microsoft/DeBERTa) was used as the entailment model.
+We used [Alpaca7B](https://crfm.stanford.edu/2023/03/13/alpaca.html) and the [GPT-3.5-Turbo API](https://platform.openai.com/docs/models#gpt-3-5-turbo) as generators, and [DeBERTa-v2-xxlarge](https://github.com/microsoft/DeBERTa), fine-tuned on the MNLI dataset, as the entailment model.
 
-To access the Alpaca7B model, simply gain access to [llama1](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form) and load the stanford alpaca weight.
-To use GPT-3.5, use openai API.
+- To use **Alpaca7B**, request access to [LLaMA](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form) and load the Stanford Alpaca weights.
+- To use **GPT-3.5**, set up the OpenAI API.
 
-If you want to change the entailment model, simply change model_name_or_path in the shell file.
+If you wish to use a different entailment model, modify the `EMDLPATH` variable in the shell script accordingly.
 
-Note that this code implementation supports for using greedy generation and logprobs of another model on-demand.
-However, if you want to use a different model, labeling must be done manually. (+ To use other APIs, you must manually configure the dataset.)
-
+This implementation supports greedy generation and obtaining log probabilities from other models on demand. However, if you want to use a different model, labeling must be done manually. To use other APIs, you must manually configure the dataset.
+(You can do this by referring to `/generation/`.)
 
 ## Data
 
-NQ dataset and QA2D dataset
+In this paper, the [Natural Questions (NQ)](https://github.com/google-research-datasets/natural-questions) dataset and the QA2D dataset, filtered with only SQuAD, are sampled and used.
+Since NQ dataset has no transformed answers, we use [Transforming Question Answering Datasets Into Natural Language Inference Datasets](https://github.com/kelvinguu/qanli) to obtain rule-based transformed sequences.
+The QA2D dataset, also available via this repository, contains human-annotated answers from Turk.
 
 ## How to run
 
+The following commands generate the figures and tables presented in the paper.
+
+To get results (in `/snapshots/`) for a given model and dataset, GPT-3.5 & NQ dataset for example,
 ```
-# gpt 3.5, nq dataset example.
 ./run_nq_gpt3.5.sh
 ```
 
+To draw box plots, GPT-3.5 & NQ dataset for example,
 ```
-# This draws box plots.
+# This draws box plots, Figure 4.
 ./run_nq_gpt3.5_plot.sh
 ```
 
+To draw bar plots,
 ```
-# This draws plots over different numbers of unlabeled samples, Figure 3.
+# This draws bar plots over different numbers of unlabeled samples, Figure 3.
 ./run_nq_gpt3.5_quan_plot.sh
+./run_nq_alpaca7B_quan_plot.sh
 ```

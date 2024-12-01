@@ -41,7 +41,7 @@ import models
 import uncertainty
 import util
 
-from nltk.corpus import wordnet
+# from nltk.corpus import wordnet
 
 from transformers.testing_utils import CaptureLogger
 # from transformers.trainer_utils import get_last_checkpoint

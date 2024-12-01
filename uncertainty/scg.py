@@ -488,7 +488,7 @@ class SCGBaseLearner(SGBaseLearner):
 
         # Save to file
         if self.params.method == 'GreedyGen-SG':
-            with open(f'{self.params.output_dir}_results.txt', 'a') as f:
+            with open(f'{self.params.output_dir}/results.txt', 'a') as f:
                 f.write('==================================================\n')
                 f.write(
                     f'[test: {name}]\n'
@@ -506,7 +506,7 @@ class SCGBaseLearner(SGBaseLearner):
                     f'E0 (full) = {(res["e_0_full_test"].long().sum()/res["e_0_full_test"].shape[0]):.4f}\n'
                     f'E0 (sel) = {(res["e_0_test"].long().sum()/res["e_0_test"].shape[0]):.4f}'
                 )
-                f.write('==================================================\n')
+                f.write('\n==================================================\n')
                 f.write('\n')
             
         return res
@@ -568,8 +568,8 @@ class SGLearner(SCGBaseLearner):
             cache_fn = None
             cache_fn_e = None
 
-        if os.path.exists(f'{params.output_dir}_results.txt'):
-            with open(f'{self.params.output_dir}_results.txt', 'w') as f:
+        if os.path.exists(f'{params.output_dir}/results.txt'):
+            with open(f'{self.params.output_dir}/results.txt', 'w') as f:
                 f.truncate(0)
 
 
@@ -746,9 +746,12 @@ class SGLearner(SCGBaseLearner):
             fer=fer,
         )
         if U_min_opt <= eps:
-            print(f'[SGen_EM(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_EM(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_EM(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_EM(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
 
         ## test
@@ -767,9 +770,12 @@ class SGLearner(SCGBaseLearner):
             fer=fer,
         )
         if U_min_opt <= eps:
-            print(f'[SGen_EM(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_EM(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_EM(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_EM(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
 
         ## test
@@ -794,9 +800,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', ld_test)
@@ -820,9 +829,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', ld_test, feat_idx=1)
@@ -849,9 +861,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', ld_test)
@@ -878,9 +893,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', ld_test, feat_idx=1)
@@ -907,9 +925,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', ld_test)
@@ -936,9 +957,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', ld_test, feat_idx=1)
@@ -959,9 +983,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen-Sup(f_M1)]', ld_test)
@@ -980,9 +1007,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen-Sup(f_M2)]', ld_test, feat_idx=1)
@@ -1011,6 +1041,7 @@ class SGLearner(SCGBaseLearner):
             verbose=params.verbose,
             fer=fer,
             K=K,
+            params=params,
         )
         print('#'*20)
         self.test(tau_s_opt, '[SGen-Semi]', ld_test, feat_idx)
@@ -1041,9 +1072,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', ld_test)
@@ -1070,9 +1104,12 @@ class SGLearner(SCGBaseLearner):
         )
 
         if U_min_opt <= eps:
-            print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}'
         else:
-            print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        with open(f'{self.params.output_dir}/results.txt', 'a') as f:
+            f.write(res + '\n')
+        print(res)
         print()
         ## test
         self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', ld_test, feat_idx=1)
@@ -1644,7 +1681,6 @@ class SGLearner(SCGBaseLearner):
                 verbose=params.verbose,
                 fer=fer,
                 K=K,
-                verbose_=False
             )
             if_failed['SGen-Semi'] = True if U_min_opt <= eps else False
 
@@ -2330,7 +2366,6 @@ class SGLearner(SCGBaseLearner):
                     verbose=params.verbose,
                     fer=fer,
                     K=K,
-                    verbose_=False
                 )
                 if_failed['SGen-Semi'] = True if U_min_opt <= eps else False
 
@@ -2463,7 +2498,7 @@ class SG_MS(SCGBaseLearner):
         verbose,
         fer,
         K,
-        verbose_=True,
+        params=None,
     ):
 
         U_opt = 0
@@ -2491,9 +2526,13 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 0
 
         if U_min_opt1 <= eps:
-             if verbose_: print(f'[SGen-Semi-1 success] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) <= eps (={eps}), efficiency = {eff_opt1}, tau = {tau_s_opt}')
+            res = f'[SGen-Semi-1 success] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) <= eps (={eps}), efficiency = {eff_opt1}, tau = {tau_s_opt}'
         else:
-             if verbose_: print(f'[SGen-Semi-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen-Semi-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        if params is not None:
+            with open(f'{params.output_dir}/results.txt', 'a') as f:
+                f.write(res + '\n')
+            print(res)
 
         tau_s_opt, U_j_opt2, U_min_opt2, eff_opt2 = SG_Semi.train(
             scores_UE=scores_m2_UE,
@@ -2518,9 +2557,13 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 1
 
         if U_min_opt2 <= eps:
-            if verbose_: print(f'[SGen-Semi-2 success] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) <= eps (={eps}), efficiency = {eff_opt2}, tau = {tau_s_opt}') # U_min?
+            res = f'[SGen-Semi-2 success] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) <= eps (={eps}), efficiency = {eff_opt2}, tau = {tau_s_opt}'
         else:
-            if verbose_: print(f'[SGen-Semi-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen-Semi-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        if params is not None:
+            with open(f'{params.output_dir}/results.txt', 'a') as f:
+                f.write(res + '\n')
+            print(res)
 
         tau_s_i_opt, tau_s_j_opt, U_j_opt3, U_min_opt3, eff_opt3 = SG_Semi2.train(
             scores_m1_UE=scores_m1_UE,
@@ -2548,16 +2591,23 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 2
 
         if U_min_opt3 <= eps:
-            if verbose_: print(f'[SGen-Semi-3 success] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) <= eps (={eps}), efficiency = {eff_opt3}, tau = {(tau_s_i_opt, tau_s_j_opt)}') # U_min?
+            res = f'[SGen-Semi-3 success] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) <= eps (={eps}), efficiency = {eff_opt3}, tau = {(tau_s_i_opt, tau_s_j_opt)}'
         else:
-            if verbose_: print(f'[SGen-Semi-3 fail] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            res = f'[SGen-Semi-3 fail] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) > eps (={eps}), tau = {tau_s_opt}'
+        if params is not None:
+            with open(f'{params.output_dir}/results.txt', 'a') as f:
+                f.write(res + '\n')
+            print(res)
 
 
         
         if min(U_min_opt1, U_min_opt2, U_min_opt3) > eps:
             feat_idx = [U_j_opt1, U_j_opt2, U_j_opt3].index(min([U_j_opt1, U_j_opt2, U_j_opt3]))
-            if verbose_: print(f'[SGen-Semi fail] U_min (={min(U_min_opt1, U_min_opt2, U_min_opt3):.4e}) <= eps (={eps}), tau = {tau_s_opt}')
-        
+            res = f'[SGen-Semi fail] U_min (={min(U_min_opt1, U_min_opt2, U_min_opt3):.4e}) <= eps (={eps}), tau = {tau_s_opt}'
+        if params is not None:
+            with open(f'{params.output_dir}/results.txt', 'a') as f:
+                f.write(res + '\n')
+            print(res)
         tau_s_opt = temp[feat_idx]
 
         ## test

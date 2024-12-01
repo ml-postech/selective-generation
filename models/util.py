@@ -3,7 +3,7 @@ import numpy as np
 
 import torch as tc
 import torch.nn as nn
-import torchvision.transforms.functional as TF
+# import torchvision.transforms.functional as TF
 
 import matplotlib
 matplotlib.use('Agg')
