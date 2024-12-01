@@ -11,7 +11,7 @@ conda activate sg
 pip install -r requirements.txt
 ```
 
-Additional dependencies (e.g., PyTorch) may need to be installed depending on your system setup and hardware.
+Additional dependencies (e.g., PyTorch) may need to be installed if you want to load models, check the below.
 
 ## Models
 
