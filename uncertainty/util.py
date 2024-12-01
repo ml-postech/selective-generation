@@ -9,6 +9,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from learning.util import to_device
+import pickle
 
 
 def logfactorial_rec(n, mem={}):
@@ -229,3 +231,248 @@ def compute_ece(mdl, ld, device):
     y_list, yh_list, ph_list = tc.cat(y_list), tc.cat(yh_list), tc.cat(ph_list)
     ece = ECE(ph_list.numpy(), yh_list.numpy(), y_list.numpy())
     return ece
+
+
+
+def box_plot(fdr_path, n_failed_path, method, model, eps):
+    # Load the pickle file
+    # with open('camera-ready/snapshots/NIPS24-nli-nq_gpt3.5-gpt3.5-GreedyGen-SGPlot-EXP-1_FDR_zu-10000_ze-3676_epS-0.25', 'rb') as file:
+    # with open('camera-ready/snapshots/NIPS24-nli-nq_gpt3.5-gpt3.5-GreedyGen-SGPlot-EXP-1_FDR_zu-10000_ze-2764_epS-0.25', 'rb') as file:
+    # with open('nq_alpaca7B-FDR_zu-10000_ze-4425_epS-0.25', 'rb') as file:
+    # with open('nq_alpaca7B-FDR_zu-10000_ze-5900_epS-0.25', 'rb') as file:
+    with open(fdr_path, 'rb') as file:
+        data = pickle.load(file)
+    # Replace the keys in data dictionary
+    
+    math_key = {
+        'SGen_PL-H-Semi': r'$\mathtt{SGen}_\mathtt{PL}^\mathtt{H-Semi}$',
+        'SGen_PFL-H-Semi': r'$\mathtt{SGen}_\mathtt{PFL}^\mathtt{H-Semi}$',
+        'SGen_NoMS-Semi': r'$\mathtt{SGen}^\mathtt{Semi}_\mathtt{NoMS}$',
+        'SGen_NoMS-Semi-Sup': r'$\mathtt{SGen}^\mathtt{Semi-Sup}_\mathtt{NoMS}$',
+        'SGen_EM': r'$\mathtt{SGen}_\mathtt{EM}$',
+        'SGen-Sup': r'$\mathtt{SGen}^\mathtt{Sup}$',
+        'SGen-Semi': r'$\mathtt{SGen}^\mathtt{Semi}$'
+    }
+    # data = {
+    #     key.replace('SGen_PL-H-Semi(f_M1)', r'$\mathtt{SGen}_\mathtt{PL}^\mathtt{H-Semi}$'+'(f_M1)')
+    #         .replace('SGen_PFL-H-Semi(f_M1)', r'$\mathtt{SGen}_\mathtt{PFL}^\mathtt{H-Semi}$'+'(f_M1)')
+    #         .replace('SGen_NoMS-Semi(f_M1)', r'$\mathtt{SGen}^\mathtt{Semi}_\mathtt{NoMS}$'+'(f_M1)')
+    #         .replace('SGen_NoMS-Semi-Sup(f_M1)', r'$\mathtt{SGen}^\mathtt{Semi-Sup}_\mathtt{NoMS}$'+'(f_M1)')
+    #         .replace('SGen_EM(f_M1)', r'$\mathtt{SGen}_\mathtt{EM}$'+'(f_M1)')
+    #         .replace('SGen-Sup(f_M1)', r'$\mathtt{SGen}^\mathtt{Sup}$'+'(f_M1)'): value 
+    #     for key, value in data.items()
+    # }
+    # data = {
+    #     key.replace('SGen_PL-H-Semi(f_M2)', r'$\mathtt{SGen}_\mathtt{PL}^\mathtt{H-Semi}$'+'(f_M2)')
+    #         .replace('SGen_PFL-H-Semi(f_M2)', r'$\mathtt{SGen}_\mathtt{PFL}^\mathtt{H-Semi}$'+'(f_M2)')
+    #         .replace('SGen_NoMS-Semi(f_M2)', r'$\mathtt{SGen}^\mathtt{Semi}_\mathtt{NoMS}$'+'(f_M2)')
+    #         .replace('SGen_NoMS-Semi-Sup(f_M2)', r'$\mathtt{SGen}^\mathtt{Semi-Sup}_\mathtt{NoMS}$'+'(f_M2)')
+    #         .replace('SGen_EM(f_M2)', r'$\mathtt{SGen}_\mathtt{EM}$'+'(f_M2)')
+    #         .replace('SGen-Sup(f_M2)', r'$\mathtt{SGen}^\mathtt{Sup}$'+'(f_M2)'): value 
+    #     for key, value in data.items()
+    # }
+    # data = {key.replace('SGen-Semi', r'$\mathtt{SGen}^\mathtt{Semi}$'): value for key, value in data.items()}
+
+    print(data.keys())
+    failed = {}
+    with open(n_failed_path, 'rb') as file:
+        data_failed = pickle.load(file)
+    for key in data.keys():
+        print(key, sum(data_failed[key]))
+        if sum(data_failed[key]) >= 80:
+            failed[key] = True
+        else:
+            failed[key] = False
+
+
+    fontsize = 15
+    # Filter the keys to separate (f_M1) and (f_M2)
+    keys_M1 = [key for key in data.keys() if '(f_M1)' in key]
+    keys_M2 = [key for key in data.keys() if '(f_M2)' in key]
+    keys_M1.append('SGen-Semi')
+    keys_M2.append('SGen-Semi')
+    # keys_M2.append('CSGen-MS')
+
+    # Filter the keys to separate SG-EM, SG-EL, CSGen-Sup and others for (f_M1)
+    keys_SL_M1 = [key for key in keys_M1 if 'SGen-Sup' in key or 'SGen_NoMS-Semi-Sup' in key]
+    keys_SSL_M1 = [key for key in keys_M1 if key not in keys_SL_M1]
+
+    # Filter the keys to separate SG-EM, SG-EL, CSGen-Sup and others for (f_M2)
+    keys_SL_M2 = [key for key in keys_M2 if 'SGen-Sup' in key or 'SGen_NoMS-Semi-Sup' in key]
+    keys_SSL_M2 = [key for key in keys_M2 if key not in keys_SL_M2]
+
+    # Extract the values for (f_M1) and (f_M2)
+    # print(keys_M1)
+    # print(data.keys)
+    values_M1 = [data[key] for key in keys_M1]
+    values_M2 = [data[key] for key in keys_M2]
+    failed_values_M1 = [failed[key] for key in keys_M1]
+    failed_values_M2 = [failed[key] for key in keys_M2]
+
+    # Calculate the mean and standard deviation for (f_M1) and (f_M2)
+    means_M1 = [np.mean(val) for val in values_M1]
+    stds_M1 = [np.std(val) for val in values_M1]
+    means_M2 = [np.mean(val) for val in values_M2]
+    stds_M2 = [np.std(val) for val in values_M2]
+
+    keys_M1 = [key[:-6] if '(f_M1)' in key else key for key in keys_M1]
+    keys_M2 = [key[:-6] if '(f_M2)' in key else key for key in keys_M2]
+    keys_SL_M1 = [key[:-6] if '(f_M1)' in key else key for key in keys_SL_M1]
+    keys_SSL_M1 = [key[:-6] if '(f_M1)' in key else key for key in keys_SSL_M1]
+    keys_SL_M2 = [key[:-6] if '(f_M2)' in key else key for key in keys_SL_M2]
+    keys_SSL_M2 = [key[:-6] if '(f_M2)' in key else key for key in keys_SSL_M2]
+
+    whis = (0.02*100, (1-0.02)*100)
+
+    if method == 'SSL':
+        # Create the box plot for (f_M1) - SSL
+        plt.figure()
+        box = plt.boxplot([values_M1[keys_M1.index(key)] for key in keys_SSL_M1], labels=[math_key[key] for key in keys_SSL_M1], whis=whis)
+        for i, key in enumerate(keys_SSL_M1):
+            box_color = 'g' if failed_values_M1[keys_M1.index(key)] else 'r'
+            plt.setp(box['boxes'][i], color=box_color)
+            plt.setp(box['medians'][i], color=box_color)
+        plt.xlabel('Method')
+        plt.ylabel('FDR-E')
+        # plt.title('Box Plot for (f_M1) - SSL')
+        # plt.ylim(0, 0.4)  # Set the y-axis limit to show values up to 0.4
+        plt.axhline(y=eps, xmin=-0.5, xmax=len(keys_SSL_M1) - 0.5, color='k', linestyle='dashed', label='$\epsilon_S = %.2f$' % eps, zorder=4)  # Add a horizontal dashed line at y=0.25
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), fontsize=fontsize, ncol=3)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5, zorder=1)
+        # plt.ylim(0, 0.4)  # Set the y-axis limit to show values up to 0.75
+        plt.tight_layout()
+        plt.savefig(f'snapshots/box_plot/{model}_f_M1_SSL.png')
+        plt.savefig(f'snapshots/box_plot/{model}_f_M1_SSL.pdf')
+
+        # Create the box plot for (f_M2) - SSL
+        plt.figure()
+        box = plt.boxplot([values_M2[keys_M2.index(key)] for key in keys_SSL_M2], labels=[math_key[key] for key in keys_SSL_M2], whis=whis)
+        for i, key in enumerate(keys_SSL_M2):
+            box_color = 'g' if failed_values_M2[keys_M2.index(key)] else 'r'
+            plt.setp(box['boxes'][i], color=box_color)
+            plt.setp(box['medians'][i], color=box_color)
+        plt.xlabel('Method')
+        plt.ylabel('FDR-E')
+        # plt.title('Box Plot for (f_M2) - SSL')
+        plt.axhline(y=eps, xmin=-0.5, xmax=len(keys_SSL_M2) - 0.5, color='k', linestyle='dashed', label='$\epsilon_S = %.2f$' % eps, zorder=4)  # Add a horizontal dashed line at y=0.25
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), fontsize=fontsize, ncol=3)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5, zorder=1)
+        # plt.ylim(0, 0.4)  # Set the y-axis limit to show values up to 0.75
+        plt.tight_layout()
+        plt.savefig(f'snapshots/box_plot/{model}_f_M2_SSL.png')
+        plt.savefig(f'snapshots/box_plot/{model}_f_M2_SSL.pdf')
+
+
+
+    if method == 'SL':
+        # Create the box plot for (f_M1) - SL
+        plt.figure()
+        box = plt.boxplot([values_M1[keys_M1.index(key)] for key in keys_SL_M1], labels=[math_key[key] for key in keys_SL_M1], whis=whis)
+        for i, key in enumerate(keys_SL_M1):
+            box_color = 'g' if failed_values_M1[keys_M1.index(key)] else 'r'
+            plt.setp(box['boxes'][i], color=box_color)
+            plt.setp(box['medians'][i], color=box_color)
+        plt.xlabel('Method')
+        plt.ylabel('FDR-E')
+        # plt.title('Box Plot for (f_M1) - SL')
+        plt.axhline(y=eps, xmin=-0.5, xmax=len(keys_SL_M1) - 0.5, color='k', linestyle='dashed', label='$\epsilon_S = %.2f$' % eps, zorder=4)  # Add a horizontal dashed line at y=0.25
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), fontsize=fontsize, ncol=3)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5, zorder=1)
+        # plt.ylim(0, 0.4)  # Set the y-axis limit to show values up to 0.75
+        plt.tight_layout()
+        plt.savefig(f'snapshots/box_plot/{model}_f_M1_SL.png')
+        plt.savefig(f'snapshots/box_plot/{model}_f_M1_SL.pdf')
+
+        # Create the box plot for (f_M2) - SL
+        plt.figure()
+        box = plt.boxplot([values_M2[keys_M2.index(key)] for key in keys_SL_M2], labels=[math_key[key] for key in keys_SL_M2], whis=whis)
+        for i, key in enumerate(keys_SL_M2):
+            box_color = 'g' if failed_values_M2[keys_M2.index(key)] else 'r'
+            plt.setp(box['boxes'][i], color=box_color)
+            plt.setp(box['medians'][i], color=box_color)
+        plt.xlabel('Method')
+        plt.ylabel('FDR-E')
+        # plt.title('Box Plot for (f_M2) - SL')
+        plt.axhline(y=eps, xmin=-0.5, xmax=len(keys_SL_M2) - 0.5, color='k', linestyle='dashed', label='$\epsilon_S = %.2f$' % eps, zorder=4)  # Add a horizontal dashed line at y=0.25
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), fontsize=fontsize, ncol=3)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5, zorder=1)
+        # plt.ylim(0, 0.4)  # Set the y-axis limit to show values up to 0.75
+        plt.tight_layout()
+        plt.savefig(f'snapshots/box_plot/{model}_f_M2_SL.png')
+        plt.savefig(f'snapshots/box_plot/{model}_f_M2_SL.pdf')
+
+
+
+def quan_plot(output_fdrs, output_effs, faileds, ablations, eps):
+    mdls = ['alpaca7B', 'gpt3.5']
+    
+    categories = {
+        'gpt3.5': [
+            [r'$\mathtt{SGen}^\mathtt{Semi}_\mathtt{NoMS}$' + f' {i // 1000}k' for i in ablations['gpt3.5'][0]],
+            [r'$\mathtt{SGen}^\mathtt{Semi}$' + f' {i // 1000}k' for i in ablations['gpt3.5'][0]]
+        ],
+        'alpaca7B': [
+            [r'$\mathtt{SGen}^\mathtt{Semi}_\mathtt{NoMS}$' + f' {i // 1000}k' for i in ablations['alpaca7B'][0]],
+            [r'$\mathtt{SGen}^\mathtt{Semi}$' + f' {i // 1000}k' for i in ablations['alpaca7B'][0]]
+        ]
+    }
+
+    plt.figure(1)
+    plt.clf()
+    for mdl in mdls:
+        for idx in range(2):
+            fdrs = [pickle.load(open(output_fdrs[mdl][i], 'rb')) for i in range(len(output_fdrs[mdl]))]
+            effs = [pickle.load(open(output_effs[mdl][i], 'rb')) for i in range(len(output_effs[mdl]))]
+
+            fdr_mean = [np.mean(fdrs[i]['SGen_NoMS-Semi(f_M2)']) for i in range(len(fdrs))] if idx == 0 else [np.mean(fdrs[i]['SGen-Semi']) for i in range(len(fdrs))]
+            eff_mean = [np.mean(effs[i]['SGen_NoMS-Semi(f_M2)']) for i in range(len(effs))] if idx == 0 else [np.mean(effs[i]['SGen-Semi']) for i in range(len(effs))]
+            fdr_std = [np.std(fdrs[i]['SGen_NoMS-Semi(f_M2)']) for i in range(len(fdrs))] if idx == 0 else [np.std(fdrs[i]['SGen-Semi']) for i in range(len(fdrs))]
+            eff_std = [np.std(effs[i]['SGen_NoMS-Semi(f_M2)']) for i in range(len(effs))] if idx == 0 else [np.std(effs[i]['SGen-Semi']) for i in range(len(effs))]
+
+            value1 = fdr_mean
+            value2 = eff_mean
+            name = 'noms' if idx == 0 else 'ms'
+            category = categories[mdl][idx]
+
+            os.makedirs(f'snapshots/quan_plot', exist_ok=True)
+            with PdfPages(f'snapshots/quan_plot/{mdl}_{name}_{mdl}' + '.pdf') as pdf:
+                fontsize = 20
+
+                x = np.arange(len(category))
+                width = 0.4 
+
+                fig, ax1 = plt.subplots(figsize=(10, 6))
+
+                # fdr-axis
+                bars1 = ax1.bar(x - width / 2, value1, width, label='FDR-E', color='#77dd77', zorder=3, capsize=5)
+                ax1.errorbar(x - width / 2, value1, yerr=fdr_std, fmt='none', ecolor='black', elinewidth=1, capsize=5, capthick=1, zorder=4)
+                ax1.set_xlabel('Methods', fontsize=fontsize)
+                ax1.set_ylabel('FDR-E', fontsize=fontsize)
+                ax1.tick_params(axis='y', labelsize=fontsize * 0.75)
+                ax1.set_ylim([None, 0.3])
+
+                ax1.set_xticks(x)
+                ax1.set_xticklabels(category, fontsize=fontsize * 0.7)
+
+                # eff-axis
+                ax2 = ax1.twinx()
+                bars2 = ax2.bar(x + width / 2, value2, width, label='efficiency', color='#FF6F61', zorder=3)
+                ax2.errorbar(x + width / 2, value2, yerr=eff_std, fmt='none', ecolor='black', elinewidth=1, capsize=5, capthick=1, zorder=4)
+                ax2.set_ylabel('efficiency', fontsize=fontsize)
+                ax2.tick_params(axis='y', labelsize=fontsize * 0.75)
+                ax2.set_ylim([0.58, 0.78]) if mdl == 'gpt3.5' else ax2.set_ylim([0.22, 0.36])
+
+                ax1.hlines(eps, -0.5, len(category) - 0.5, colors='k', linestyles='dashed', label=r'$\epsilon_S = %.2f$' % eps, zorder=4)
+
+                fig.legend(loc='upper center', bbox_to_anchor=(0.5, 1.08), fontsize=fontsize, ncol=3)
+
+                ax1.grid(True, which='both', linestyle='--', linewidth=0.5, zorder=1)
+                ax2.grid(False)
+
+                fig.tight_layout()
+
+                plt.show()
+
+                plt.savefig(f'snapshots/quan_plot/{mdl}_{name}_{mdl}.png', bbox_inches='tight')
+                pdf.savefig(bbox_inches='tight')
+

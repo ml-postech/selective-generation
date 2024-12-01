@@ -101,13 +101,13 @@ def init_datasets_qna(data_args, model_args, training_args):
     raw_datasets['val1'] = raw_datasets['train']
     raw_datasets['val2'] = raw_datasets['validation']
 
-    z_u = min(len(raw_datasets['val1']), training_args.z_u)
-    z_e = int(0.75 * len(raw_datasets['val2'])) if training_args.exp_method == 'SSL' else len(raw_datasets['val2'])
-    raw_datasets['val1'] = raw_datasets['val1'].shuffle(training_args.seed).select(range(z_u)) if not training_args.method.endswith('QuanPlot') else raw_datasets['val1'].shuffle(training_args.seed)
-    raw_datasets['val2'] = raw_datasets['val2'].shuffle(training_args.seed).select(range(z_e))
+    training_args.z_u = min(len(raw_datasets['val1']), training_args.z_u)
+    training_args.z_e = int(0.75 * len(raw_datasets['val2'])) if training_args.exp_method == 'SSL' else len(raw_datasets['val2'])
+    raw_datasets['val1'] = raw_datasets['val1'].shuffle(training_args.seed).select(range(training_args.z_u)) if not training_args.method.endswith('QuanPlot') else raw_datasets['val1'].shuffle(training_args.seed)
+    raw_datasets['val2'] = raw_datasets['val2'].shuffle(training_args.seed).select(range(training_args.z_e))
 
-    print('Z_U size:', z_u)
-    print('Z_E size:', z_e)
+    print('Z_U size:', training_args.z_u)
+    print('Z_E size:', training_args.z_e)
     raw_datasets['val1+2'] = concatenate_datasets([raw_datasets['val1'], raw_datasets['val2']])
 
     
@@ -200,11 +200,6 @@ def init_datasets_qna(data_args, model_args, training_args):
         
         return batch, label  #(x, y) format
     
-
-    tokenized_datasets['val1'] = tokenized_datasets['train']
-
-    tokenized_datasets['val2'] = tokenized_datasets['validation']
-    tokenized_datasets['val1+2'] = concatenate_datasets([tokenized_datasets['val1'], tokenized_datasets['val2']])
     
     
     print(
@@ -221,7 +216,7 @@ def init_datasets_qna(data_args, model_args, training_args):
                             #collate_fn=transformers.DataCollatorWithPadding(tokenizer=tokenizer),
                             collate_fn=collate_fn,
                             batch_size=training_args.per_device_train_batch_size,
-                            shuffle=True,
+                            shuffle=False,
                             num_workers=training_args.dataloader_num_workers),
         'val1': DataLoader(tokenized_datasets['val1'],
                            collate_fn=collate_fn,
@@ -363,8 +358,9 @@ def main():
             name_postfix='ncgprec'
         )
         l.train(
-            dataloaders['val1'] if dataloaders is not None else None, # deprecated
-            dataloaders['val2'] if dataloaders is not None else None, # deprecated
+            dataloaders['val1'] if dataloaders is not None else None,
+            dataloaders['val2'] if dataloaders is not None else None,
+            dataloaders['test'] if dataloaders is not None else None,
             updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
         )
     elif training_args.method == 'GreedyGen-SGPlot':
@@ -396,8 +392,9 @@ def main():
             name_postfix='ncgprec'
         )
         l.plot(
-            dataloaders['val1'] if dataloaders is not None else None, # deprecated
-            dataloaders['val2'] if dataloaders is not None else None, # deprecated
+            dataloaders['val1'] if dataloaders is not None else None,
+            dataloaders['val2'] if dataloaders is not None else None,
+            dataloaders['test'] if dataloaders is not None else None,
             updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
         )
     elif training_args.method == 'GreedyGen-SGQuanPlot':
@@ -429,8 +426,9 @@ def main():
             name_postfix='ncgprec'
         )
         l.quan_plot(
-            dataloaders['val1'] if dataloaders is not None else None, # deprecated
-            dataloaders['val2'] if dataloaders is not None else None, # deprecated
+            dataloaders['val1'] if dataloaders is not None else None,
+            dataloaders['val2'] if dataloaders is not None else None,
+            dataloaders['test'] if dataloaders is not None else None,
             updated_params=types.SimpleNamespace(n=len(raw_datasets['val1']), n_e=len(raw_datasets['val2']))
         )
 

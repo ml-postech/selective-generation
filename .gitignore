@@ -1,4 +1,4 @@
 *~
 *.pyc
 snapshots/*
-data/nli/nq*/nli*.jsonl
+data/nli/*/nli*.jsonl

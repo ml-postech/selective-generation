@@ -149,6 +149,14 @@ class EntailmentSet(ConformalSetModel):
         training_args = self.training_args
 
         raw_datasets = self.rd[split]
+        if answer_preds is not None:
+            if 'generated_answer' not in raw_datasets.column_names:
+                raw_datasets = raw_datasets.add_column('generated_answer', answer_preds)
+            else:
+                raw_datasets = raw_datasets.map(
+                    lambda examples, idx: {'generated_answer': answer_preds[idx]},
+                    with_indices=True
+                )
         
         tokenizer = self.tokenizer
 
@@ -244,6 +252,15 @@ class EntailmentSet(ConformalSetModel):
 
         raw_datasets = self.rd[split]
 
+        if answer_preds is not None:
+            if 'generated_answer' not in raw_datasets.column_names:
+                raw_datasets = raw_datasets.add_column('generated_answer', answer_preds)
+            else:
+                raw_datasets = raw_datasets.map(
+                    lambda examples, idx: {'generated_answer': answer_preds[idx]},
+                    with_indices=True
+                )        
+        
         expanded_data = []
         for data in raw_datasets:
             gen = data['generated_answer']
@@ -257,8 +274,6 @@ class EntailmentSet(ConformalSetModel):
                     }
                 )
         raw_datasets = Dataset.from_list(expanded_data)
-
-        
         tokenizer = self.tokenizer
 
 

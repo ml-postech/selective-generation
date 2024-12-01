@@ -14,7 +14,6 @@ FER=true
 K=5
 
 
-
 DATASETNAMELIST=(nli)
 DATASETCONFLIST=(nq_gpt3.5)
 
@@ -47,8 +46,8 @@ EXP=${EXPS[$i_exp]}
 
 		python3 main.py \
 			--tag ${TAG} \
-			--cache_cal_fn "CAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-${NEXP} \
-			--cache_eval_fn "EVAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-${NEXP} \
+			--cache_cal_fn "CAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD} \
+			--cache_eval_fn "EVAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD} \
 			--model_name_or_path ${MDLPATH} \
 			--dataset_name data/${DATASETNAME} \
 			--dataset_config_name ${DATASETCONF} \
@@ -57,14 +56,14 @@ EXP=${EXPS[$i_exp]}
 			--per_device_train_batch_size 32 \
 			--per_device_eval_batch_size 32 \
 			--fp16 \
-			--exp_name ${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-EXP-${i_exp} \
-			--output_dir snapshots/${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-EXP-${i_exp} \
+			--exp_name ${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-EXP-${EXP} \
+			--output_dir snapshots/${TAG}-${DATASETNAME}-${DATASETCONF}-${MDLNAME}-${METHOD}-EXP-${EXP} \
 			--method $METHOD \
 			--eps ${EPS} \
 			--entail_model ${EMDLNAME} \
 			--entail_model_name_or_path ${EMDLPATH} \
-			--cache_ent_fn "ENT"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD}-${NEXP} \
-			--cache_ent_eval_fn "ENTEVAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD}-${NEXP} \
+			--cache_ent_fn "ENT"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD} \
+			--cache_ent_eval_fn "ENTEVAL"-${TAG}-${DATASETNAME}-${DATASETCONF}-${EMDLNAME}-${METHOD} \
 			--delta ${DELTA} \
 			--delta_p ${DELTA_P} \
 			--z_u ${ZU} \

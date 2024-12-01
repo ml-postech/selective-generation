@@ -208,8 +208,8 @@ class SCGBaseLearner(SGBaseLearner):
 
         # selection
         # save scores before selection...
-        scores_m1 = kwargs['scores_cal']  if 'scores_cal' in kwargs else kwargs['scores_m1']
-        scores_m2 = kwargs['scores_cal']  if 'scores_cal' in kwargs else kwargs['scores_m2']
+        scores_m1 = kwargs['scores_m1']
+        scores_m2 = kwargs['scores_m2']
         probs = kwargs_ent['probs']
         
         
@@ -256,8 +256,8 @@ class SCGBaseLearner(SGBaseLearner):
         # pre-generation
         output_list = []
         # using 'logprobs'
-        if ld is None:
-            rd = self.entail_model.rd['test']
+        rd = self.entail_model.rd['test']
+        if self.mdl.G.base_model == None:
             step = self.params.per_device_eval_batch_size
             for i in range(0, len(rd), step):
                 # scores = tc.hstack([tc.tensor(lp).mean().exp() for lp in rd[i:i+step]['logprobs']])
@@ -268,7 +268,7 @@ class SCGBaseLearner(SGBaseLearner):
                 answer = [normalize_answer(a) for a in decoded_answer]
                 answer_pred = [normalize_answer(a) for a in decoded_answer_pred]
 
-                scores_m2 = tc.hstack([(1 - tc.tensor(ss)[..., 0]).mean() for ss in rd[i:i+step]['samples_scores']])
+                # scores_m2 = tc.hstack([(1 - tc.tensor(ss)[..., 0]).mean() for ss in rd[i:i+step]['samples_scores']])
                 scores_m1 = tc.hstack([tc.tensor(lp).mean().exp() for lp in rd[i:i+step]['logprobs']])
                 # CAUTION, not ids. 
                 output_list.append(
@@ -277,22 +277,30 @@ class SCGBaseLearner(SGBaseLearner):
                         'answer':decoded_answer,
                         'answer_pred':decoded_answer_pred,
                         'scores_m1': scores_m1,
-                        'scores_m2': scores_m2,
+                        # 'scores_m2': scores_m2,
                     }
                 )
-
-        # using 'logprobs'
-        if ld is None:
             decoded_answer_pred = [v_i for v in output_list for v_i in v['answer_pred']]
         else:
+            if cache_fn and os.path.exists(cache_fn):
+                print(f'[pre-generation] loading precomputed generation results from {cache_fn}')
+                output_list = pickle.load(open(cache_fn, 'rb'))
+            else:
+                for x, y in tqdm(ld, desc="Precompute generation results"):
+                    x = to_device(x, self.params.device)
+                    
+                    with tc.no_grad():
+                        output = self.mdl.generate(x)
+                    output['scores_m1'] = tc.hstack([lp.mean().exp() for lp in output['logprobs_answer_pred']])
+                    output_list.append(to_device(output, 'cpu'))
+                if cache_fn:
+                    pickle.dump(output_list, open(cache_fn, 'wb'))
+                    print(f'[pre-generation] saving precomputed generation results to {cache_fn}')
+
             decoded_answer_pred = self.mdl.G.base_model.tokenizer.batch_decode(
                 [v_i for v in output_list for v_i in v['answer_ids_pred']],
                 skip_special_tokens=True
             )
-        entail_ld = self.entail_model.init_dataset_nli(
-            decoded_answer_pred,
-            'test'
-        )
 
         if self.params.cache_ent_eval_fn:
             cache_ent_fn = os.path.join(
@@ -302,6 +310,34 @@ class SCGBaseLearner(SGBaseLearner):
             )
             os.makedirs(os.path.dirname(cache_ent_fn), exist_ok=True)
 
+        # For SelfCheckGPT score
+        if self.params.entail_model in ["deberta-v2-xxlarge-mnli", None]:
+            scores_m2 = tc.hstack([(1 - tc.tensor(ss['samples_scores'])[..., 0]).mean() for ss in rd])
+        else:
+            entail_ld_sam = self.entail_model.init_sample_dataset_nli(
+                decoded_answer_pred,
+                'test'
+            )
+            cache_ent_fn_sam = os.path.join(
+                self.params.cache_root,
+                f'{self.params.cache_ent_fn}-CAL2-SAM',
+            ) if self.params.cache_ent_fn else None
+            
+            ent_scores_dict_sam = self.precompute_entail_scores(entail_ld_sam, cache_fn=cache_ent_fn_sam)
+            sample_size = len(rd[0]['samples'])
+            ent_probs_sam = ent_scores_dict_sam['probs'].view(-1, sample_size, 3)
+            scores_m2 = (1 - ent_probs_sam[..., 0]).mean(dim=1)
+
+        # Split scores_m2 into batches and add to output_list
+        batch_size = len(output_list[0]['scores_m1'])
+        scores_m2_batches = [scores_m2[i:i + batch_size] for i in range(0, len(scores_m2), batch_size)]
+        for output, scores_m2_batch in zip(output_list, scores_m2_batches):
+            output['scores_m2'] = to_device(scores_m2_batch, 'cpu')
+
+        entail_ld = self.entail_model.init_dataset_nli(
+            decoded_answer_pred,
+            'test'
+        )
         # pre-classification
         ent_output_list = []
         # we can use 'entailment_scores' in the dataset.
@@ -318,24 +354,23 @@ class SCGBaseLearner(SGBaseLearner):
                         'labels':tc.tensor(label),
                     }
                 )
+        elif cache_ent_fn and os.path.exists(cache_ent_fn):
+            print(f'[pre-generation] loading precomputed generation results from {cache_ent_fn}')
+            ent_output_list = pickle.load(open(cache_ent_fn, 'rb'))
         else:
-            if cache_ent_fn and os.path.exists(cache_ent_fn):
-                print(f'[pre-generation] loading precomputed generation results from {cache_ent_fn}')
-                ent_output_list = pickle.load(open(cache_ent_fn, 'rb'))
-            else:
-                for x, y in tqdm(entail_ld, desc="Precompute generation results"):
-                    x = to_device(x, self.params.device)
-                    
-                    with tc.no_grad():
-                        output = self.entail_model.classify(x, y)
-                    ent_output_list.append(to_device(output, 'cpu'))
-                if cache_ent_fn:
-                    pickle.dump(ent_output_list, open(cache_ent_fn, 'wb'))
-                    print(f'[pre-generation] saving precomputed generation results to {cache_ent_fn}')
+            for x, y in tqdm(entail_ld, desc="Precompute generation results"):
+                x = to_device(x, self.params.device)
+                
+                with tc.no_grad():
+                    output = self.entail_model.classify(x, y)
+                ent_output_list.append(to_device(output, 'cpu'))
+            if cache_ent_fn:
+                pickle.dump(ent_output_list, open(cache_ent_fn, 'wb'))
+                print(f'[pre-generation] saving precomputed generation results to {cache_ent_fn}')
         
 
         # compute metrics
-        for output, ent_output in tqdm(zip(output_list, ent_output_list), desc="compute metrics"):
+        for output, ent_output in zip(output_list, ent_output_list):
 
             llm_stat_i = self.eval_generation(output, ent_output, tau_s, feat_idx)
 
@@ -403,7 +438,7 @@ class SCGBaseLearner(SGBaseLearner):
         return ret, ret_json
 
     
-    def test(self, tau_s, name, feat_idx=None, save=False, verbose=True):
+    def test(self, tau_s, name, ld=None, feat_idx=None, save=False, verbose=True):
         # compute basic metrics for language generators
         fn = os.path.join(self.params.snapshot_root,
                           self.params.exp_name,
@@ -413,7 +448,7 @@ class SCGBaseLearner(SGBaseLearner):
             print(f'load precomputed results at {fn}')
             res = pickle.load(open(fn, 'rb'))
         else:
-            metrics, ref = self.compute_metrics(tau_s, feat_idx, ld=None) #FIXME
+            metrics, ref = self.compute_metrics(tau_s, feat_idx, ld)
             for k in [k for k in metrics.keys()]:
                 metrics[k + '_test'] = metrics.pop(k)
             res = metrics
@@ -436,26 +471,43 @@ class SCGBaseLearner(SGBaseLearner):
                 f'[test: {name}]\n'
                 f'#test dataset: {res["sel_test"].shape[0]}\n'
                 f'#selection = {res["sel_test"].long().sum()}\n'
-                # f'#ent_selection = {res["ent_sel_test"].long().sum()}\n'
                 f'efficiency = {res["sel_test"].float().mean()*100:.4f}%\n'
-                # f'ent_efficiency = {res["ent_sel_test"].float().mean()*100:.4f}%\n'
                 f'EM (full) = {res["EM_test"].float().mean():.4f}\n'
                 f'EM (sel) = {res["EM_test"][res["sel_test"]].float().mean():.4f}\n'
-                # f'EM (ent_sel) = {res["EM_test"][res["ent_sel_test"]].float().mean():.4f}\n'
                 f'F1 (full) = {res["F1_test"].float().mean():.4f}\n'
                 f'F1 (sel) = {res["F1_test"][res["sel_test"]].float().mean():.4f}\n'
-                # f'F1 (ent_sel) = {res["F1_test"][res["ent_sel_test"]].float().mean():.4f}\n'
                 f'Inclusion (full) = {res["Inc_test"].float().mean():.4f}\n'
                 f'Inclusion (sel) = {res["Inc_test"][res["sel_test"]].float().mean():.4f}\n'
-                # f'Inclusion (ent_sel) = {res["Inc_test"][res["ent_sel_test"]].float().mean():.4f}\n'
                 f'ECE (full) = {res["ECE_test"]*100:.4f}%\n'
                 f'ECE (sel) = {res["ECE_sel_test"]*100:.4f}%\n'
-                # f'ECE (ent_sel) = {res["ECE_ent_sel_test"]*100:.4f}%'
                 f'E0 (full) = {(res["e_0_full_test"].long().sum()/res["e_0_full_test"].shape[0]):.4f}\n'
                 f'E0 (sel) = {(res["e_0_test"].long().sum()/res["e_0_test"].shape[0]):.4f}'
             )
             print('==================================================')
             print()
+
+        # Save to file
+        if self.params.method == 'GreedyGen-SG':
+            with open(f'{self.params.output_dir}_results.txt', 'a') as f:
+                f.write('==================================================\n')
+                f.write(
+                    f'[test: {name}]\n'
+                    f'#test dataset: {res["sel_test"].shape[0]}\n'
+                    f'#selection = {res["sel_test"].long().sum()}\n'
+                    f'efficiency = {res["sel_test"].float().mean()*100:.4f}%\n'
+                    f'EM (full) = {res["EM_test"].float().mean():.4f}\n'
+                    f'EM (sel) = {res["EM_test"][res["sel_test"]].float().mean():.4f}\n'
+                    f'F1 (full) = {res["F1_test"].float().mean():.4f}\n'
+                    f'F1 (sel) = {res["F1_test"][res["sel_test"]].float().mean():.4f}\n'
+                    f'Inclusion (full) = {res["Inc_test"].float().mean():.4f}\n'
+                    f'Inclusion (sel) = {res["Inc_test"][res["sel_test"]].float().mean():.4f}\n'
+                    f'ECE (full) = {res["ECE_test"]*100:.4f}%\n'
+                    f'ECE (sel) = {res["ECE_sel_test"]*100:.4f}%\n'
+                    f'E0 (full) = {(res["e_0_full_test"].long().sum()/res["e_0_full_test"].shape[0]):.4f}\n'
+                    f'E0 (sel) = {(res["e_0_test"].long().sum()/res["e_0_test"].shape[0]):.4f}'
+                )
+                f.write('==================================================\n')
+                f.write('\n')
             
         return res
     
@@ -466,7 +518,7 @@ class SGLearner(SCGBaseLearner):
         super().__init__(model=model, entail_model=entail_model, params=params, name_postfix=name_postfix)
         
     
-    def train(self, ld1, ld2, updated_params=None):
+    def train(self, ld1, ld2, ld_test, updated_params=None):
         # init params
         params = copy.deepcopy(self.params)
         if updated_params:
@@ -516,6 +568,10 @@ class SGLearner(SCGBaseLearner):
             cache_fn = None
             cache_fn_e = None
 
+        if os.path.exists(f'{params.output_dir}_results.txt'):
+            with open(f'{self.params.output_dir}_results.txt', 'w') as f:
+                f.truncate(0)
+
 
         rd1 = self.entail_model.rd['val1']
         rd2 = self.entail_model.rd['val2']
@@ -538,7 +594,6 @@ class SGLearner(SCGBaseLearner):
         
         # Could be different from the answers in dataset if not greedy.
         else:
-
             scores_dict_u = self.precompute_scores(ld1, params.z_u, cache_fn=cache_fn)
             scores_dict_e = self.precompute_scores(ld2, params.z_e, cache_fn=cache_fn_e)
 
@@ -550,6 +605,8 @@ class SGLearner(SCGBaseLearner):
             decoded_answer_pred_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids_pred'], skip_special_tokens=True)
             decoded_answer_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids'], skip_special_tokens=True)
             decoded_answer_pred_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids_pred'], skip_special_tokens=True)
+
+            decoded_answer_ue = decoded_answer_u + decoded_answer_e
             decoded_answer_pred_ue = decoded_answer_pred_u + decoded_answer_pred_e
          
         answer_e = [normalize_answer(a) for a in decoded_answer_e]
@@ -695,7 +752,7 @@ class SGLearner(SCGBaseLearner):
         print()
 
         ## test
-        self.test(tau_s_opt, '[SGen_EM(f_M1)]')
+        self.test(tau_s_opt, '[SGen_EM(f_M1)]', ld_test)
         quali_tau_s.append(tau_s_opt)
         ############################################
         print()
@@ -716,7 +773,7 @@ class SGLearner(SCGBaseLearner):
         print()
 
         ## test
-        self.test(tau_s_opt, '[SGen_EM(f_M2)]')
+        self.test(tau_s_opt, '[SGen_EM(f_M2)]', ld_test, feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -742,7 +799,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]')
+        self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', ld_test)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -768,7 +825,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', ld_test, feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -797,7 +854,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]')
+        self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', ld_test)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -826,7 +883,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', ld_test, feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -855,7 +912,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]')
+        self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', ld_test)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -884,7 +941,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', ld_test, feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -907,7 +964,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen-Sup(f_M1)]')
+        self.test(tau_s_opt, '[SGen-Sup(f_M1)]', ld_test)
         quali_tau_s.append(tau_s_opt)
 
         ############################################
@@ -928,7 +985,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen-Sup(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen-Sup(f_M2)]', ld_test, feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -956,7 +1013,7 @@ class SGLearner(SCGBaseLearner):
             K=K,
         )
         print('#'*20)
-        self.test(tau_s_opt, '[SGen-Semi]', feat_idx)
+        self.test(tau_s_opt, '[SGen-Semi]', ld_test, feat_idx)
         quali_tau_s.append(tau_s_opt)
         print('#'*20)
         print()
@@ -989,7 +1046,7 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]')
+        self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', ld_test)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
@@ -1018,14 +1075,14 @@ class SGLearner(SCGBaseLearner):
             print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
         print()
         ## test
-        self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', feat_idx=1)
+        self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', ld_test, feat_idx=1)
         quali_tau_s.append(tau_s_opt)
         ############################################
 
 
         # sys.exit()
 
-    def plot(self, ld1, ld2, updated_params=None):
+    def plot(self, ld1, ld2, ld_test, updated_params=None):
         # init params
         params = copy.deepcopy(self.params)
         if updated_params:
@@ -1074,6 +1131,16 @@ class SGLearner(SCGBaseLearner):
         else:
             cache_fn = None
             cache_fn_e = None
+
+
+        # Load the results
+        output_fdr = f'snapshots/box_plot/{params.exp_name}_FDR_zu-{params.z_u}_ze-{params.z_e}_epS-{eps}'
+        output_failed = f'snapshots/box_plot/{params.exp_name}_n-failed_zu-{params.z_u}_ze-{params.z_e}_epS-{eps}'
+        
+        if os.path.exists(output_fdr) and os.path.exists(output_failed):
+            print(f'Load the results from {output_fdr} and {output_failed}')
+            box_plot(output_fdr, output_failed, params.exp_method, params.model, eps)
+            return
     
 
         eff_res = []
@@ -1141,6 +1208,8 @@ class SGLearner(SCGBaseLearner):
                 decoded_answer_pred_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids_pred'], skip_special_tokens=True)
                 decoded_answer_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids'], skip_special_tokens=True)
                 decoded_answer_pred_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids_pred'], skip_special_tokens=True)
+
+                decoded_answer_ue = decoded_answer_u + decoded_answer_e
                 decoded_answer_pred_ue = decoded_answer_pred_u + decoded_answer_pred_e
 
             answer_e = [normalize_answer(a) for a in decoded_answer_e]
@@ -1271,7 +1340,6 @@ class SGLearner(SCGBaseLearner):
             fdrs = {}
             if_failed = {}
 
-            print()
             ############################################
             #            SGen_EM(f_M1)             #
             tau_s_opt, U_min_opt, eff = SG_Baseline.train(
@@ -1283,20 +1351,18 @@ class SGLearner(SCGBaseLearner):
                 fer=fer,
             )
             if U_min_opt <= eps:
-                print(f'[SGen-EM(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-EM(f_M1)'] = True
+                # print(f'[SGen_EM(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_EM(f_M1)'] = True
             else:
-                print(f'[SGen-EM(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-EM(f_M1)'] = False
-            print()
+                # print(f'[SGen_EM(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_EM(f_M1)'] = False
 
             ## test
-            res = self.test(tau_s_opt, '[SGen-EM(f_M1)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_EM(f_M1)]', ld_test, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-EM(f_M1)'] = eff
-            fdrs['SGen-EM(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_EM(f_M1)'] = eff
+            fdrs['SGen_EM(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
-            print()
             ############################################
             #            SGen_EM(f_M2)             #
             tau_s_opt, U_min_opt, eff = SG_Baseline.train(
@@ -1308,18 +1374,17 @@ class SGLearner(SCGBaseLearner):
                 fer=fer,
             )
             if U_min_opt <= eps:
-                print(f'[SGen-EM(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                if_failed['SGen-EM(f_M2)'] = True
+                # print(f'[SGen_EM(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                if_failed['SGen_EM(f_M2)'] = True
             else:
-                print(f'[SGen-EM(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                if_failed['SGen-EM(f_M2)'] = False
-            print()
+                # print(f'[SGen_EM(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                if_failed['SGen_EM(f_M2)'] = False
 
             ## test
-            res = self.test(tau_s_opt, '[SGen-EM(f_M2)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_EM(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen-EM(f_M2)'] = eff
-            fdrs['SGen-EM(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen_EM(f_M2)'] = eff
+            fdrs['SGen_EM(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             ############################################
 
             ############################################
@@ -1339,14 +1404,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_PL-H-Semi(f_M1)'] = True
             else:
-                print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_PL-H-Semi(f_M1)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', ld_test, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_PL-H-Semi(f_M1)'] = eff
             fdrs['SGen_PL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1369,14 +1433,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_PL-H-Semi(f_M2)'] = True
             else:
-                print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_PL-H-Semi(f_M2)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_PL-H-Semi(f_M2)'] = eff
             fdrs['SGen_PL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1402,14 +1465,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_PFL-H-Semi(f_M1)'] = True
             else:
-                print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_PFL-H-Semi(f_M1)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', ld_test, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_PFL-H-Semi(f_M1)'] = eff
             fdrs['SGen_PFL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1435,14 +1497,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_PFL-H-Semi(f_M2)'] = True
             else:
-                print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_PFL-H-Semi(f_M2)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_PFL-H-Semi(f_M2)'] = eff
             fdrs['SGen_PFL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1468,14 +1529,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_NoMS-Semi(f_M1)'] = True
             else:
-                print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_NoMS-Semi(f_M1)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', ld_test, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_NoMS-Semi(f_M1)'] = eff
             fdrs['SGen_NoMS-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1501,14 +1561,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_NoMS-Semi(f_M2)'] = True
             else:
-                print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_NoMS-Semi(f_M2)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_NoMS-Semi(f_M2)'] = eff
             fdrs['SGen_NoMS-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1528,14 +1587,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen-Sup(f_M1)'] = True
             else:
-                print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen-Sup(f_M1)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-Sup(f_M1)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen-Sup(f_M1)]', ld_test, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen-Sup(f_M1)'] = eff
             fdrs['SGen-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1552,14 +1610,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen-Sup(f_M2)'] = True
             else:
-                print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen-Sup(f_M2)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen-Sup(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen-Sup(f_M2)'] = eff
             fdrs['SGen-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1587,16 +1644,16 @@ class SGLearner(SCGBaseLearner):
                 verbose=params.verbose,
                 fer=fer,
                 K=K,
+                verbose_=False
             )
-            if_failed['SGen_NoMS-Semi-NS'] = True if U_min_opt <= eps else False
+            if_failed['SGen-Semi'] = True if U_min_opt <= eps else False
 
             
-            res = self.test(tau_s_opt, '[SGen-Semi]', feat_idx, verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen-Semi]', ld_test, feat_idx, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
-            effs['SGen_NoMS-Semi-NS'] = eff
-            fdrs['SGen_NoMS-Semi-NS'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+            effs['SGen-Semi'] = eff
+            fdrs['SGen-Semi'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
             # print('#'*20)
-            print()
             ############################################
 
             # SGen_NoMS-Semi-Sup
@@ -1621,14 +1678,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = True
             else:
-                print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', ld_test, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_NoMS-Semi-Sup(f_M1)'] = eff
             fdrs['SGen_NoMS-Semi-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1654,14 +1710,13 @@ class SGLearner(SCGBaseLearner):
             )
 
             if U_min_opt <= eps:
-                print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                # print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                 if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = True
             else:
-                print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                # print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                 if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = False
-            print()
             ## test
-            res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
+            res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
             eff = res["sel_test"].float().mean()
             effs['SGen_NoMS-Semi-Sup(f_M2)'] = eff
             fdrs['SGen_NoMS-Semi-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -1681,14 +1736,15 @@ class SGLearner(SCGBaseLearner):
 
             
         # Ensure the directories exist
-        os.makedirs(f'camera-ready/{params.output_dir}', exist_ok=True)
+        os.makedirs(f'snapshots/box_plot', exist_ok=True)
 
         # Save the results
-        pickle.dump(result, open(f'camera-ready/{params.output_dir}_FDR_zu-{params.z_u}_ze-{params.z_e}_epS-{eps}', 'wb'))
-        pickle.dump(falied_result, open(f'camera-ready/{params.output_dir}_n-failed_zu-{params.z_u}_ze-{params.z_e}_epS-{eps}', 'wb'))
-        sys.exit(0)
+        pickle.dump(result, open(output_fdr, 'wb'))
+        pickle.dump(falied_result, open(output_failed, 'wb'))
 
-    def quan_plot(self, ld1, ld2, updated_params=None):
+        box_plot(output_fdr, output_failed, params.exp_method, params.model, eps)
+
+    def quan_plot(self, ld1, ld2, ld_test, updated_params=None):
         # init params
         params = copy.deepcopy(self.params)
         if updated_params:
@@ -1737,9 +1793,9 @@ class SGLearner(SCGBaseLearner):
         else:
             cache_fn = None
             cache_fn_e = None
-    
+        
 
-
+        
         # shuffled only once for each zu_size
         rd1_origin = self.entail_model.rd['val1']
         rd2_origin = self.entail_model.rd['val2']
@@ -1751,6 +1807,32 @@ class SGLearner(SCGBaseLearner):
         elif params.model == 'alpaca7B':
             ablations = [10000, 15000, 20000, 25000]
             
+        # Check the results (temp, not modularized)
+        models = {
+            'gpt3.5': [[1000, 3000, 5000, 10000], 2757],
+            'alpaca7B': [[10000, 15000, 20000, 25000], 4424]
+        }
+        if_cached_all = True
+        output_fdrs = {'gpt3.5': [], 'alpaca7B': []}
+        output_effs = {'gpt3.5': [], 'alpaca7B': []}
+        output_faileds = {'gpt3.5': [], 'alpaca7B': []}
+        for model, abs in models.items():
+            abus, abe = abs[0], abs[1]
+            for abu in abus:
+                output_fdr = f'snapshots/quan_plot/{params.tag}-nli-nq_{model}-{model}-GreedyGen-SGQuanPlot-EXP-SSL_FDR_zu-{abu}_ze-{abe}_epS-{eps}'
+                output_eff = f'snapshots/quan_plot/{params.tag}-nli-nq_{model}-{model}-GreedyGen-SGQuanPlot-EXP-SSL_EFF_zu-{abu}_ze-{abe}_epS-{eps}'
+                output_failed = f'snapshots/quan_plot/{params.tag}-nli-nq_{model}-{model}-GreedyGen-SGQuanPlot-EXP-SSL_n-failed_zu-{abu}_ze-{abe}_epS-{eps}'
+                if os.path.exists(output_fdr) and os.path.exists(output_failed) and os.path.exists(output_eff):
+                    output_fdrs[model].append(output_fdr)
+                    output_effs[model].append(output_eff)
+                    output_faileds[model].append(output_failed)
+                    continue
+                if_cached_all = False
+        if if_cached_all:
+            print(f'Load the results from {output_fdr} and {output_failed}')
+            quan_plot(output_fdrs, output_effs, output_faileds, models, eps)
+            return
+        
         for ablation in ablations:
             rd1 = rd1_origin.select(range(ablation))
             eff_res = []
@@ -1812,6 +1894,8 @@ class SGLearner(SCGBaseLearner):
                     decoded_answer_pred_u = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_u['answer_ids_pred'], skip_special_tokens=True)
                     decoded_answer_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids'], skip_special_tokens=True)
                     decoded_answer_pred_e = self.mdl.G.base_model.tokenizer.batch_decode(scores_dict_e['answer_ids_pred'], skip_special_tokens=True)
+
+                    decoded_answer_ue = decoded_answer_u + decoded_answer_e
                     decoded_answer_pred_ue = decoded_answer_pred_u + decoded_answer_pred_e            
 
                 answer_e = [normalize_answer(a) for a in decoded_answer_e]
@@ -1942,7 +2026,6 @@ class SGLearner(SCGBaseLearner):
                 fdrs = {}
                 if_failed = {}
 
-                print()
                 ############################################
                 #            SGen_EM(f_M1)             #
                 tau_s_opt, U_min_opt, eff = SG_Baseline.train(
@@ -1954,20 +2037,18 @@ class SGLearner(SCGBaseLearner):
                     fer=fer,
                 )
                 if U_min_opt <= eps:
-                    print(f'[SGen-EM(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-EM(f_M1)'] = True
+                    # print(f'[SGen_EM(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_EM(f_M1)'] = True
                 else:
-                    print(f'[SGen-EM(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-EM(f_M1)'] = False
-                print()
+                    # print(f'[SGen_EM(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_EM(f_M1)'] = False
 
                 ## test
-                res = self.test(tau_s_opt, '[SGen-EM(f_M1)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_EM(f_M1)]', ld_test, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-EM(f_M1)'] = eff
-                fdrs['SGen-EM(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_EM(f_M1)'] = eff
+                fdrs['SGen_EM(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
-                print()
                 ############################################
                 #            SGen_EM(f_M2)             #
                 tau_s_opt, U_min_opt, eff = SG_Baseline.train(
@@ -1979,18 +2060,17 @@ class SGLearner(SCGBaseLearner):
                     fer=fer,
                 )
                 if U_min_opt <= eps:
-                    print(f'[SGen-EM(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
-                    if_failed['SGen-EM(f_M2)'] = True
+                    # print(f'[SGen_EM(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    if_failed['SGen_EM(f_M2)'] = True
                 else:
-                    print(f'[SGen-EM(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
-                    if_failed['SGen-EM(f_M2)'] = False
-                print()
+                    # print(f'[SGen_EM(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    if_failed['SGen_EM(f_M2)'] = False
 
                 ## test
-                res = self.test(tau_s_opt, '[SGen-EM(f_M2)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_EM(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen-EM(f_M2)'] = eff
-                fdrs['SGen-EM(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen_EM(f_M2)'] = eff
+                fdrs['SGen_EM(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 ############################################
 
                 ############################################
@@ -2010,14 +2090,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_PL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_PL-H-Semi(f_M1)'] = True
                 else:
-                    print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_PL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_PL-H-Semi(f_M1)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M1)]', ld_test, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_PL-H-Semi(f_M1)'] = eff
                 fdrs['SGen_PL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2040,14 +2119,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_PL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_PL-H-Semi(f_M2)'] = True
                 else:
-                    print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_PL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_PL-H-Semi(f_M2)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_PL-H-Semi(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_PL-H-Semi(f_M2)'] = eff
                 fdrs['SGen_PL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2073,14 +2151,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_PFL-H-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_PFL-H-Semi(f_M1)'] = True
                 else:
-                    print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_PFL-H-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_PFL-H-Semi(f_M1)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M1)]', ld_test, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_PFL-H-Semi(f_M1)'] = eff
                 fdrs['SGen_PFL-H-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2106,14 +2183,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_PFL-H-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_PFL-H-Semi(f_M2)'] = True
                 else:
-                    print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_PFL-H-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_PFL-H-Semi(f_M2)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_PFL-H-Semi(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_PFL-H-Semi(f_M2)'] = eff
                 fdrs['SGen_PFL-H-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2139,14 +2215,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_NoMS-Semi(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_NoMS-Semi(f_M1)'] = True
                 else:
-                    print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_NoMS-Semi(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_NoMS-Semi(f_M1)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M1)]', ld_test, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_NoMS-Semi(f_M1)'] = eff
                 fdrs['SGen_NoMS-Semi(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2172,14 +2247,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_NoMS-Semi(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_NoMS-Semi(f_M2)'] = True
                 else:
-                    print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_NoMS-Semi(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_NoMS-Semi(f_M2)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', feat_idx=1, verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_NoMS-Semi(f_M2)'] = eff
                 fdrs['SGen_NoMS-Semi(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2199,14 +2273,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen-Sup(f_M1)'] = True
                 else:
-                    print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen-Sup(f_M1)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-Sup(f_M1)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen-Sup(f_M1)]', ld_test, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen-Sup(f_M1)'] = eff
                 fdrs['SGen-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2223,14 +2296,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen-Sup(f_M2)'] = True
                 else:
-                    print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen-Sup(f_M2)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen-Sup(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen-Sup(f_M2)'] = eff
                 fdrs['SGen-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2258,16 +2330,16 @@ class SGLearner(SCGBaseLearner):
                     verbose=params.verbose,
                     fer=fer,
                     K=K,
+                    verbose_=False
                 )
-                if_failed['SGen_NoMS-Semi-NS'] = True if U_min_opt <= eps else False
+                if_failed['SGen-Semi'] = True if U_min_opt <= eps else False
 
                 
-                res = self.test(tau_s_opt, '[SGen-Semi]', feat_idx, verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen-Semi]', ld_test, feat_idx, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
-                effs['SGen_NoMS-Semi-NS'] = eff
-                fdrs['SGen_NoMS-Semi-NS'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
+                effs['SGen-Semi'] = eff
+                fdrs['SGen-Semi'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
                 # print('#'*20)
-                print()
                 ############################################
 
                 # SGen_NoMS-Semi-Sup
@@ -2292,14 +2364,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_NoMS-Semi-Sup(f_M1) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = True
                 else:
-                    print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_NoMS-Semi-Sup(f_M1) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_NoMS-Semi-Sup(f_M1)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M1)]', ld_test, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_NoMS-Semi-Sup(f_M1)'] = eff
                 fdrs['SGen_NoMS-Semi-Sup(f_M1)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2325,14 +2396,13 @@ class SGLearner(SCGBaseLearner):
                 )
 
                 if U_min_opt <= eps:
-                    print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
+                    # print(f'[SGen_NoMS-Semi-Sup(f_M2) success] U_min (={U_min_opt:.4e}) <= eps (={eps}), efficiency = {eff}, tau = {tau_s_opt}') # U_min?
                     if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = True
                 else:
-                    print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+                    # print(f'[SGen_NoMS-Semi-Sup(f_M2) fail] U_min (={U_min_opt:.4e}) > eps (={eps}), tau = {tau_s_opt}')
                     if_failed['SGen_NoMS-Semi-Sup(f_M2)'] = False
-                print()
                 ## test
-                res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', feat_idx=1, verbose=params.verbose)
+                res = self.test(tau_s_opt, '[SGen_NoMS-Semi-Sup(f_M2)]', ld_test, feat_idx=1, verbose=params.verbose)
                 eff = res["sel_test"].float().mean()
                 effs['SGen_NoMS-Semi-Sup(f_M2)'] = eff
                 fdrs['SGen_NoMS-Semi-Sup(f_M2)'] = (res["e_0_test"].long().sum()/res["e_0_test"].shape[0])
@@ -2354,15 +2424,18 @@ class SGLearner(SCGBaseLearner):
 
             
             # Ensure the directories exist
-            os.makedirs(f'camera-ready/snapshots/quan_plots', exist_ok=True)
+            os.makedirs(f'snapshots/quan_plot', exist_ok=True)
+
+            output_fdr = f'snapshots/quan_plot/{params.exp_name}_FDR_zu-{ablation}_ze-{params.z_e}_epS-{eps}'
+            output_eff = f'snapshots/quan_plot/{params.exp_name}_EFF_zu-{ablation}_ze-{params.z_e}_epS-{eps}'
+            output_failed = f'snapshots/quan_plot/{params.exp_name}_n-failed_zu-{ablation}_ze-{params.z_e}_epS-{eps}'
 
             # Save the results
-            pickle.dump(result, open(f'camera-ready/snapshots/quan_plots/{params.exp_name}_FDR_zu-{ablation}_ze-{params.z_e}_epS-{eps}', 'wb'))
-            pickle.dump(eff_result, open(f'camera-ready/snapshots/quan_plots/{params.exp_name}_EFF_zu-{ablation}_ze-{params.z_e}_epS-{eps}', 'wb'))
-            pickle.dump(falied_result, open(f'camera-ready/snapshots/quan_plots/{params.exp_name}_n-failed_zu-{ablation}_ze-{params.z_e}_epS-{eps}', 'wb'))
+            pickle.dump(result, open(output_fdr, 'wb'))
+            pickle.dump(eff_result, open(output_eff, 'wb'))
+            pickle.dump(falied_result, open(output_failed, 'wb'))
 
-            
-        # sys.exit(0)
+        print(f'The results are saved in {output_fdr}, {output_eff}, {output_failed}. You need to learn all models manually. Check /uncertainty/util.py')
 
 # SG
 class SG_MS(SCGBaseLearner):
@@ -2390,6 +2463,7 @@ class SG_MS(SCGBaseLearner):
         verbose,
         fer,
         K,
+        verbose_=True,
     ):
 
         U_opt = 0
@@ -2417,9 +2491,9 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 0
 
         if U_min_opt1 <= eps:
-            print(f'[SGen-Semi-1 success] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) <= eps (={eps}), efficiency = {eff_opt1}, tau = {tau_s_opt}') # U_min?
+             if verbose_: print(f'[SGen-Semi-1 success] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) <= eps (={eps}), efficiency = {eff_opt1}, tau = {tau_s_opt}')
         else:
-            print(f'[SGen-Semi-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+             if verbose_: print(f'[SGen-Semi-1 fail] U_j (={U_j_opt1:.4e}), U_min (={U_min_opt1:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
         tau_s_opt, U_j_opt2, U_min_opt2, eff_opt2 = SG_Semi.train(
             scores_UE=scores_m2_UE,
@@ -2444,9 +2518,9 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 1
 
         if U_min_opt2 <= eps:
-            print(f'[SGen-Semi-2 success] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) <= eps (={eps}), efficiency = {eff_opt2}, tau = {tau_s_opt}') # U_min?
+            if verbose_: print(f'[SGen-Semi-2 success] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) <= eps (={eps}), efficiency = {eff_opt2}, tau = {tau_s_opt}') # U_min?
         else:
-            print(f'[SGen-Semi-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            if verbose_: print(f'[SGen-Semi-2 fail] U_j (={U_j_opt2:.4e}), U_min (={U_min_opt2:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
         tau_s_i_opt, tau_s_j_opt, U_j_opt3, U_min_opt3, eff_opt3 = SG_Semi2.train(
             scores_m1_UE=scores_m1_UE,
@@ -2474,15 +2548,15 @@ class SG_MS(SCGBaseLearner):
             feat_idx = 2
 
         if U_min_opt3 <= eps:
-            print(f'[SGen-Semi-3 success] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) <= eps (={eps}), efficiency = {eff_opt3}, tau = {(tau_s_i_opt, tau_s_j_opt)}') # U_min?
+            if verbose_: print(f'[SGen-Semi-3 success] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) <= eps (={eps}), efficiency = {eff_opt3}, tau = {(tau_s_i_opt, tau_s_j_opt)}') # U_min?
         else:
-            print(f'[SGen-Semi-3 fail] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) > eps (={eps}), tau = {tau_s_opt}')
+            if verbose_: print(f'[SGen-Semi-3 fail] U_j (={U_j_opt3:.4e}), U_min (={U_min_opt3:.4e}) > eps (={eps}), tau = {tau_s_opt}')
 
 
         
         if min(U_min_opt1, U_min_opt2, U_min_opt3) > eps:
             feat_idx = [U_j_opt1, U_j_opt2, U_j_opt3].index(min([U_j_opt1, U_j_opt2, U_j_opt3]))
-            print(f'[SGen-Semi fail] U_min (={min(U_min_opt1, U_min_opt2, U_min_opt3):.4e}) <= eps (={eps}), tau = {tau_s_opt}')
+            if verbose_: print(f'[SGen-Semi fail] U_min (={min(U_min_opt1, U_min_opt2, U_min_opt3):.4e}) <= eps (={eps}), tau = {tau_s_opt}')
         
         tau_s_opt = temp[feat_idx]
 
@@ -2726,7 +2800,7 @@ class SG_Heuristic(SCGBaseLearner):
             scores_UE = scores_UE[filter_idx_ue]
             ent_probs_UE = ent_probs_UE[filter_idx_ue]
 
-            print('filterd:', filter_idx_u.sum())
+            # print('filterd:', filter_idx_u.sum())
             assert filter_idx_u.sum() == filter_idx_ue.sum()
 
         n = scores_UE.shape[0]
