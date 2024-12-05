@@ -39,18 +39,18 @@ The following commands generate the figures and tables presented in the paper.
 
 To get results (in `/snapshots/`) for a given model and dataset, GPT-3.5 & NQ dataset for example,
 ```
-./run_nq_gpt3.5.sh
+./scripts/run_nq_gpt3.5.sh
 ```
 
 To draw box plots, GPT-3.5 & NQ dataset for example,
 ```
 # This draws box plots, Figure 4.
-./run_nq_gpt3.5_plot.sh
+./scripts/run_nq_gpt3.5_plot.sh
 ```
 
 To draw bar plots,
 ```
 # This draws bar plots over different numbers of unlabeled samples, Figure 3.
-./run_nq_gpt3.5_quan_plot.sh
-./run_nq_alpaca7B_quan_plot.sh
+./scripts/run_nq_gpt3.5_quan_plot.sh
+./scripts/run_nq_alpaca7B_quan_plot.sh
 ```
