@@ -1,4 +1,4 @@
-# Selective Generation for Controllable Language Models
+# Selective Generation for Controllable Language Models
 
 This repository contains the PyTorch implementation, which outputs evaluation results for the Neurips 2024 paper "[Selective Generation for Controllable Language Models](https://arxiv.org/abs/2307.09254)".
 
